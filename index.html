@@ -159,14 +159,16 @@
       box-shadow: 0 0 0 1px rgba(220,38,38,.08), 0 6px 16px rgba(15,23,42,.08);
     }
     .card.selected {
-      outline: 3px solid #2563eb;
+      outline: 4px solid #22c55e !important;
       outline-offset: -2px;
-      box-shadow: 0 0 0 1px rgba(37,99,235,.08), 0 8px 18px rgba(15,23,42,.10);
+      background: #dcfce7 !important;
+      box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
     }
     .card.selected.conflict {
-      outline: 3px solid #dc2626;
+      outline: 4px solid #22c55e !important;
       outline-offset: -2px;
-      box-shadow: 0 0 0 1px rgba(220,38,38,.08), 0 8px 18px rgba(15,23,42,.10);
+      background: #dcfce7 !important;
+      box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
     }
     .card-name {
       font-size: 13px;
@@ -235,7 +237,28 @@
       .app { padding: 12px; }
       .info-grid { grid-template-columns: 1fr; }
     }
-  </style>
+  
+.card.selected-strong{border:3px solid #22c55e !important; box-shadow:0 0 0 2px #22c55e !important;}
+
+.selected-card {
+  outline: 4px solid #22c55e !important;
+  outline-offset: -2px;
+  background: #dcfce7 !important;
+  box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
+}
+
+
+.card.selected,
+.card.selected.conflict,
+.card.selected.same-teacher,
+.selected-card {
+  outline: 4px solid #22c55e !important;
+  outline-offset: -2px !important;
+  background: #dcfce7 !important;
+  box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
+}
+
+</style>
 </head>
 <body>
   <div class="app">
@@ -879,6 +902,14 @@
         render();
         return;
       }
+      const selectedFound = findCardById(state.model, selected);
+      const clickedFound = findCardById(state.model, cardId);
+      if (selectedFound && clickedFound && selectedFound.row.id !== clickedFound.row.id) {
+        state.selectedCardId = cardId;
+        state.lastMovedCardId = cardId;
+        render();
+        return;
+      }
       placeSelectedAtTarget(selected, cardId);
     }
 
@@ -1029,7 +1060,7 @@
       const editing = state.editingCardId === card.id;
       if (!name) {
         return `
-          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected' : ''}" data-card-id="${card.id}" style="${style}">
+          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected-card' : ''}" data-card-id="${card.id}" style="${style}">
             ${editing
               ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
               : `<div class="plus" data-edit-empty-id="${card.id}">+</div>`}
@@ -1197,5 +1228,24 @@
 
     render();
   </script>
+
+<script id="selected-card-fallback">
+(function() {
+  const origRender = window.render;
+  if (typeof origRender === 'function') {
+    window.render = function() {
+      const res = origRender.apply(this, arguments);
+      try {
+        if (window.state && window.state.selectedCardId) {
+          const el = document.querySelector('[data-card-id="' + window.state.selectedCardId + '"]');
+          if (el) el.classList.add('selected-card');
+        }
+      } catch (e) {}
+      return res;
+    };
+  }
+})();
+</script>
+
 </body>
 </html>
