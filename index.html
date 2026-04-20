@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rozpis třídních schůzek</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --bg: #f1f5f9;
+      --panel: #ffffff;
+      --muted: #64748b;
+      --line: #cbd5e1;
+      --line-soft: #e2e8f0;
+      --head: #e2e8f0;
+      --ok-bg: #ecfdf5;
+      --ok-line: #86efac;
+      --warn-bg: #fef3c7;
+      --warn-line: #f59e0b;
+      --err-bg: #fef2f2;
+      --err-line: #fca5a5;
+      --blue-bg: #eff6ff;
+      --blue-line: #93c5fd;
+      --selected: #1d4ed8;
+      --shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+      --cell-w: 132px;
+      --cell-h: 62px;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: #0f172a; }
+    .app { max-width: 1780px; margin: 0 auto; padding: 24px; }
+    .panel {
+      background: var(--panel);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    h1 { margin: 0; font-size: 30px; }
+    .title-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .badge {
+      display: inline-block; padding: 6px 12px; border-radius: 999px;
+      background: #eef2ff; color: #3730a3; font-size: 13px; font-weight: 600;
+    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; align-items: center; }
+    button, .file-btn {
+      appearance: none; border: 1px solid var(--line); background: white; color: #0f172a;
+      border-radius: 14px; padding: 10px 16px; font-size: 14px; cursor: pointer;
+    }
+    button.primary, .file-btn.primary { background: #0f172a; color: white; border-color: #0f172a; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    input[type=file] { display: none; }
+    .filename { font-size: 14px; color: var(--muted); }
+    .info-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-top: 16px; }
+    .info-box { background: #f8fafc; border-radius: 16px; padding: 14px; color: #334155; font-size: 14px; }
+    .alert {
+      margin-top: 14px; padding: 14px 16px; border-radius: 18px; border: 1px solid;
+      font-size: 14px;
+    }
+    .alert strong { display: block; margin-bottom: 2px; }
+    .alert.ok { background: var(--ok-bg); border-color: var(--ok-line); }
+    .alert.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+    .alert.error { background: var(--err-bg); border-color: var(--err-line); }
+    .alert.info { background: var(--blue-bg); border-color: var(--blue-line); }
+
+    .grid-wrap {
+      overflow: auto;
+      max-height: 78vh;
+      border-radius: 18px;
+      border: 1px solid var(--line-soft);
+      background: white;
+    }
+    .schedule-grid {
+      display: grid;
+      min-width: max-content;
+      gap: 0;
+      position: relative;
+    }
+    .cell {
+      border-right: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+      background: white;
+      padding: 8px;
+      min-height: 46px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+    }
+    .head {
+      background: var(--head);
+      font-weight: 700;
+      justify-content: center;
+      text-align: center;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      box-shadow: 0 1px 0 var(--line-soft);
+    }
+    .fixed-head {
+      background: var(--head);
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .fixed-cell { background: white; }
+    .fixed-strong { font-weight: 700; }
+    .row-track {
+      position: relative;
+      height: var(--cell-h);
+      background: white;
+      border-right: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+      overflow: hidden;
+    }
+    .slot-row {
+      position: absolute;
+      inset: 0;
+      display: flex;
+    }
+    .slot-cell {
+      width: var(--cell-w);
+      height: var(--cell-h);
+      border-right: 1px solid var(--line-soft);
+      background: white;
+      cursor: pointer;
+      transition: background .15s ease;
+    }
+    .slot-cell.occupied { background: #f8fafc; cursor: default; }
+    .slot-cell.targetable { background: #dbeafe; }
+    .card {
+      position: absolute;
+      top: 4px;
+      height: calc(var(--cell-h) - 8px);
+      border: 1px solid rgba(148,163,184,.42);
+      border-radius: 20px;
+      box-shadow: 0 4px 12px rgba(15,23,42,.05);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 6px 10px;
+      cursor: pointer;
+      user-select: none;
+      overflow: hidden;
+      transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+      backdrop-filter: blur(3px);
+      background: #f5f5f5;
+    }
+    .card:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(15,23,42,.08); }
+    .card.same-teacher {
+      outline: 3px solid #2563eb;
+      outline-offset: -2px;
+      box-shadow: 0 0 0 1px rgba(37,99,235,.08), 0 6px 16px rgba(15,23,42,.08);
+    }
+    .card.conflict {
+      outline: 3px solid #dc2626;
+      outline-offset: -2px;
+      box-shadow: 0 0 0 1px rgba(220,38,38,.08), 0 6px 16px rgba(15,23,42,.08);
+    }
+    .card.selected {
+      outline: 3px solid #2563eb;
+      outline-offset: -2px;
+      box-shadow: 0 0 0 1px rgba(37,99,235,.08), 0 8px 18px rgba(15,23,42,.10);
+    }
+    .card.selected.conflict {
+      outline: 3px solid #dc2626;
+      outline-offset: -2px;
+      box-shadow: 0 0 0 1px rgba(220,38,38,.08), 0 8px 18px rgba(15,23,42,.10);
+    }
+    .card-name {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+      cursor: text;
+    }
+    .card-name-edit {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+      cursor: text;
+      outline: none;
+      border: none;
+      background: transparent;
+      padding: 0;
+      min-width: 0;
+      min-height: 0;
+      display: block;
+    }
+    .card-name-edit:empty:before {
+      content: attr(data-placeholder);
+      color: #cbd5e1;
+      font-weight: 400;
+    }
+    .card-time {
+      font-size: 11px;
+      color: rgba(15,23,42,.72);
+      font-weight: 600;
+    }
+    .card-empty {
+      align-items: center;
+      text-align: center;
+      color: #94a3b8;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border-style: dashed;
+      border-color: rgba(148,163,184,.45);
+      justify-content: center;
+    }
+    .card-empty .plus {
+      font-size: 28px;
+      line-height: 1;
+      color: #cbd5e1;
+      margin-bottom: 0;
+      font-weight: 300;
+    }
+    .card-empty.editing {
+      border-style: solid;
+      background: #ffffff;
+    }
+    .card-empty .card-time { color: #94a3b8; }
+    .conflict-list > div { margin-top: 6px; }
+    .action-row { margin-top: 10px; }
+    @media (max-width: 1100px) {
+      .info-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    }
+    @media (max-width: 700px) {
+      .app { padding: 12px; }
+      .info-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel">
+      <div class="title-row">
+        <h1 id="title">Rozpis třídních schůzek</h1>
+        <span class="badge">list „kolečko“</span>
+      </div>
+
+      <div class="toolbar">
+        <label class="file-btn primary">
+          Načíst Excel
+          <input id="fileInput" type="file" accept=".xlsx,.xls" />
+        </label>
+        <button id="autoFixBtn" disabled>Opravit kolize</button>
+        <button id="downloadBtn" disabled>Stáhnout upravený Excel</button>
+        <button id="resetBtn">Reset</button>
+        <div id="fileName" class="filename"></div>
+      </div>
+
+
+    </div>
+
+    <div id="gridPanel" class="panel" style="display:none;">
+      <div class="grid-wrap" id="gridWrap">
+        <div id="grid" class="schedule-grid"></div>
+      </div>
+    </div>
+
+    <div id="infoPanel" class="panel" style="display:none;">
+      <div class="info-grid">
+        <div class="info-box">První tři sloupce mají jen <strong>nutnou šířku podle textu</strong>.</div>
+        <div class="info-box">Fixovaný je jen <strong>horní řádek s časy</strong>.</div>
+        <div class="info-box">Klik na kartu ji <strong>vybere</strong>, další klik ji <strong>umístí</strong>.</div>
+        <div class="info-box">Dvojklik na text nebo na <strong>+</strong> upraví jméno přímo v kartě.</div>
+      </div>
+      <div id="message"></div>
+      <div id="conflicts"></div>
+      <div id="suggestion"></div>
+    </div>
+  </div>
+
+  <script>
+    const FIXED_COLS = 3;
+    const DATA_START_ROW = 2;
+    const HEADER_TITLE_ROW = 0;
+    const HEADER_LABEL_ROW = 1;
+    const CELL_W = 132;
+    const CELL_H = 62;
+    const MIN_FIXED_W = [54, 54, 54];
+
+    let state = {
+      model: null,
+      fileName: '',
+      lastMovedCardId: null,
+      message: null,
+      selectedCardId: null,
+      editingCardId: null,
+      editingDraft: '',
+      fixedWidths: [70, 70, 70],
+    };
+
+    const fileInput = document.getElementById('fileInput');
+    const autoFixBtn = document.getElementById('autoFixBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const titleEl = document.getElementById('title');
+    const fileNameEl = document.getElementById('fileName');
+    const messageEl = document.getElementById('message');
+    const conflictsEl = document.getElementById('conflicts');
+    const suggestionEl = document.getElementById('suggestion');
+    const gridPanel = document.getElementById('gridPanel');
+    const infoPanel = document.getElementById('infoPanel');
+    const gridWrap = document.getElementById('gridWrap');
+    const gridEl = document.getElementById('grid');
+
+    function normalizeText(value) {
+      return String(value ?? '').replace(/\s+/g, ' ').trim();
+    }
+
+    function normalizeTeacherKey(value) {
+      return normalizeText(value).toLocaleLowerCase('cs-CZ');
+    }
+
+    function splitTeachers(value) {
+      const raw = String(value ?? '').replace(/\n+/g, ' ').trim();
+      if (!raw) return [];
+      return raw.split(',').map(x => normalizeText(x)).filter(Boolean);
+    }
+
+    function colLabel(n) {
+      let s = '';
+      let x = n + 1;
+      while (x > 0) {
+        const mod = (x - 1) % 26;
+        s = String.fromCharCode(65 + mod) + s;
+        x = Math.floor((x - 1) / 26);
+      }
+      return s;
+    }
+
+    function deepClone(obj) {
+      return JSON.parse(JSON.stringify(obj));
+    }
+
+    function measureTextWidth(text) {
+      const len = normalizeText(text).length;
+      return Math.max(0, Math.min(220, Math.round(len * 8.1 + 26)));
+    }
+
+    function computeFixedWidths(model) {
+      const widths = [];
+      for (let i = 0; i < FIXED_COLS; i += 1) {
+        let max = measureTextWidth(model.fixedHeader[i] || '');
+        for (const row of model.rowData) {
+          max = Math.max(max, measureTextWidth(row.fixed[i] || ''));
+        }
+        widths.push(Math.max(MIN_FIXED_W[i], max));
+      }
+      return widths;
+    }
+
+    function parseSheetToModel(sheet) {
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+      let lastUsedCol = 0;
+      let lastUsedRow = 0;
+
+      rows.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (normalizeText(cell)) {
+            lastUsedCol = Math.max(lastUsedCol, colIndex + 1);
+            lastUsedRow = Math.max(lastUsedRow, rowIndex + 1);
+          }
+        });
+      });
+
+      const trimmedRows = rows.slice(0, lastUsedRow).map(row => Array.from({ length: lastUsedCol }, (_, i) => row[i] ?? ''));
+      const title = normalizeText(trimmedRows[HEADER_TITLE_ROW]?.[0] ?? 'Rozpis třídních schůzek');
+      const headerRow = trimmedRows[HEADER_LABEL_ROW] ?? [];
+      const fixedHeader = headerRow.slice(0, FIXED_COLS);
+      const timelineCols = Array.from({ length: Math.max(0, lastUsedCol - FIXED_COLS) }, (_, i) => FIXED_COLS + i);
+
+      const rowData = [];
+      for (let r = DATA_START_ROW; r < trimmedRows.length; r += 1) {
+        const row = trimmedRows[r] ?? [];
+        const fixed = row.slice(0, FIXED_COLS);
+        if (!fixed.some(x => normalizeText(x)) && !timelineCols.some(c => normalizeText(row[c]))) continue;
+
+        const cards = [];
+        let offset = 0;
+        while (offset < timelineCols.length) {
+          const globalCol = FIXED_COLS + offset;
+          const current = String(row[globalCol] ?? '');
+          const next = String(row[globalCol + 1] ?? '');
+          const currentN = normalizeText(current);
+          const nextN = normalizeText(next);
+          const span = currentN && currentN === nextN ? 2 : 1;
+
+          cards.push({
+            id: `r${r}-c${globalCol}`,
+            rowId: `row-${r}`,
+            rowIndex: r,
+            startCol: globalCol,
+            span,
+            name: current,
+          });
+          offset += span;
+        }
+
+        rowData.push({
+          id: `row-${r}`,
+          rowIndex: r,
+          fixed,
+          cards,
+        });
+      }
+
+      return { title, headerRow, fixedHeader, timelineCols, rowData, maxCols: lastUsedCol };
+    }
+
+    function findCardById(model, cardId) {
+      for (const row of model.rowData) {
+        const card = row.cards.find(c => c.id === cardId);
+        if (card) return { row, card };
+      }
+      return null;
+    }
+
+    function getRowById(model, rowId) {
+      return model.rowData.find(r => r.id === rowId) || null;
+    }
+
+    function cardColumns(card) {
+      return Array.from({ length: card.span }, (_, i) => card.startCol + i);
+    }
+
+    function rowOccupancy(row, ignoreCardId = null) {
+      const occupied = new Map();
+      for (const card of row.cards) {
+        if (card.id === ignoreCardId) continue;
+        for (const col of cardColumns(card)) occupied.set(col, card.id);
+      }
+      return occupied;
+    }
+
+    function canPlace(row, card, targetCol, timelineCols) {
+      const first = timelineCols[0];
+      const last = timelineCols[timelineCols.length - 1];
+      if (targetCol < first || targetCol + card.span - 1 > last) return false;
+      const occupied = rowOccupancy(row, card.id);
+      for (let i = 0; i < card.span; i += 1) {
+        if (occupied.has(targetCol + i)) return false;
+      }
+      return true;
+    }
+
+
+    function rowToCellValues(row, timelineCols) {
+      const cells = {};
+      timelineCols.forEach(col => { cells[col] = ''; });
+      row.cards.forEach(card => {
+        cardColumns(card).forEach(col => { cells[col] = card.name ?? ''; });
+      });
+      return cells;
+    }
+
+    function rebuildRowCards(row, timelineCols, cellValues) {
+      const cards = [];
+      let i = 0;
+      while (i < timelineCols.length) {
+        const col = timelineCols[i];
+        const current = String(cellValues[col] ?? '');
+        const nextCol = timelineCols[i + 1];
+        const next = nextCol != null ? String(cellValues[nextCol] ?? '') : '';
+        const span = normalizeText(current) && current === next ? 2 : 1;
+        cards.push({
+          id: `r${row.rowIndex}-c${col}`,
+          rowId: row.id,
+          rowIndex: row.rowIndex,
+          startCol: col,
+          span,
+          name: current,
+        });
+        i += span;
+      }
+      row.cards = cards;
+      return row;
+    }
+
+    function getContiguousSinglePair(row, clickedCard) {
+      if (clickedCard.span !== 1) return null;
+      const singles = new Map(row.cards.filter(c => c.span === 1).map(c => [c.startCol, c]));
+      const right = singles.get(clickedCard.startCol + 1);
+      if (right) return [clickedCard, right];
+      const left = singles.get(clickedCard.startCol - 1);
+      if (left) return [left, clickedCard];
+      return null;
+    }
+
+    function swapRangesInRow(row, startA, lenA, startB, lenB) {
+      const timelineCols = state.model.timelineCols;
+      const cells = rowToCellValues(row, timelineCols);
+      const rangeA = Array.from({ length: lenA }, (_, i) => cells[startA + i] ?? '');
+      const rangeB = Array.from({ length: lenB }, (_, i) => cells[startB + i] ?? '');
+      for (let i = 0; i < lenA; i += 1) cells[startA + i] = '';
+      for (let i = 0; i < lenB; i += 1) cells[startB + i] = '';
+      for (let i = 0; i < lenB; i += 1) cells[startA + i] = rangeB[i] ?? '';
+      for (let i = 0; i < lenA; i += 1) cells[startB + i] = rangeA[i] ?? '';
+      rebuildRowCards(row, timelineCols, cells);
+    }
+
+
+    function swapEqualCards(row, sourceCard, targetCard) {
+      swapRangesInRow(row, sourceCard.startCol, sourceCard.span, targetCard.startCol, targetCard.span);
+      return true;
+    }
+
+    function moveSpan1IntoSpan2(row, sourceCard, targetCard) {
+      const timelineCols = state.model.timelineCols;
+      const cells = rowToCellValues(row, timelineCols);
+      const sourceValue = cells[sourceCard.startCol] ?? '';
+      const displacedLeft = cells[targetCard.startCol] ?? '';
+      const displacedRight = cells[targetCard.startCol + 1] ?? '';
+
+      cells[sourceCard.startCol] = displacedLeft;
+      cells[targetCard.startCol] = sourceValue;
+      cells[targetCard.startCol + 1] = displacedRight;
+      rebuildRowCards(row, timelineCols, cells);
+      return true;
+    }
+
+    function moveSpan2IntoSpan1(row, sourceCard, targetCard) {
+      const pair = getContiguousSinglePair(row, targetCard);
+      if (!pair) return false;
+      swapRangesInRow(row, sourceCard.startCol, 2, pair[0].startCol, 2);
+      return true;
+    }
+
+    function placeSelectedAtTarget(cardAId, cardBId) {
+      const next = deepClone(state.model);
+      const a = findCardById(next, cardAId);
+      const b = findCardById(next, cardBId);
+      if (!a || !b) return false;
+      if (a.row.id !== b.row.id) {
+        setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
+        return false;
+      }
+
+      const row = a.row;
+      let ok = false;
+      let detail = 'Pozice kartiček jsem v řádku upravil.';
+
+      if (a.card.span === b.card.span) {
+        ok = swapEqualCards(row, a.card, b.card);
+      } else if (a.card.span === 1 && b.card.span === 2) {
+        ok = moveSpan1IntoSpan2(row, a.card, b.card);
+        detail = 'Pětiminutovou kartičku jsem vložil na zvolené místo a původní karta z cíle se přesunula zpět.';
+      } else if (a.card.span === 2 && b.card.span === 1) {
+        ok = moveSpan2IntoSpan1(row, a.card, b.card);
+        detail = 'Desetiminutovou kartičku jsem přesunul na zvolené místo a uvolněné karty se přesunuly zpět.';
+      }
+
+      if (!ok) {
+        setMessage('error', 'Přesun nelze provést', 'Na zvolené místo se kartička nedá korektně umístit.');
+        return false;
+      }
+
+      state.model = next;
+      state.lastMovedCardId = cardAId;
+      state.selectedCardId = null;
+      state.message = { type: 'ok', title: 'Kartička umístěna', detail };
+      render();
+      return true;
+    }
+
+    function moveSelectedToEmptySlot(cardId, targetCol) {
+      const next = deepClone(state.model);
+      const found = findCardById(next, cardId);
+      if (!found) return false;
+      const { row, card } = found;
+      if (!canPlace(row, card, targetCol, next.timelineCols)) {
+        setMessage('error', 'Sem kartičku nelze přesunout', 'Kartičku lze dát jen do volného místa a jen v jejím původním řádku.');
+        return false;
+      }
+      const cells = rowToCellValues(row, next.timelineCols);
+      cardColumns(card).forEach(col => { cells[col] = ''; });
+      for (let i = 0; i < card.span; i += 1) cells[targetCol + i] = card.name ?? '';
+      rebuildRowCards(row, next.timelineCols, cells);
+      state.model = next;
+      state.lastMovedCardId = cardId;
+      state.selectedCardId = null;
+      state.message = { type: 'ok', title: 'Kartička umístěna', detail: `Kartička je nově na pozici ${colLabel(targetCol)}.` };
+      render();
+      return true;
+    }
+
+    function getConflicts(model) {
+      const teacherColumnMap = new Map();
+      for (const row of model.rowData) {
+        for (const card of row.cards) {
+          const teachers = splitTeachers(card.name);
+          if (!teachers.length) continue;
+          for (const teacher of teachers) {
+            for (const col of cardColumns(card)) {
+              const key = `${col}__${normalizeTeacherKey(teacher)}`;
+              if (!teacherColumnMap.has(key)) teacherColumnMap.set(key, []);
+              teacherColumnMap.get(key).push({
+                teacher,
+                col,
+                rowIndex: row.rowIndex,
+                rowId: row.id,
+                cardId: card.id,
+              });
+            }
+          }
+        }
+      }
+      const groups = Array.from(teacherColumnMap.values()).filter(group => group.length > 1);
+      const cardIds = new Set();
+      const columns = new Set();
+      groups.forEach(group => group.forEach(item => {
+        cardIds.add(item.cardId);
+        columns.add(item.col);
+      }));
+      return { groups, cardIds, columns };
+    }
+
+    function evaluateConflictScore(model) {
+      return getConflicts(model).groups.reduce((sum, group) => sum + (group.length - 1), 0);
+    }
+
+    function buildSuggestion(model, movedCardId) {
+      const found = findCardById(model, movedCardId);
+      if (!found) return null;
+      const { row, card } = found;
+      const conflicts = getConflicts(model).groups.filter(group => group.some(item => item.cardId === movedCardId));
+      if (!conflicts.length) return null;
+
+      const before = evaluateConflictScore(model);
+      const targetCols = [...new Set(conflicts.flatMap(group => group.map(item => item.col)))].sort((a, b) => a - b);
+      let best = null;
+
+      for (const candidate of row.cards) {
+        if (candidate.id === card.id) continue;
+        const cloned = deepClone(model);
+        const clonedRow = getRowById(cloned, row.id);
+        const moved = clonedRow.cards.find(x => x.id === card.id);
+        const other = clonedRow.cards.find(x => x.id === candidate.id);
+        if (moved.span === other.span) {
+        const tmp = moved.startCol;
+        moved.startCol = other.startCol;
+        other.startCol = tmp;
+      } else if (moved.span === 2 && other.span === 1) {
+        const pair = getContiguousSinglePair(clonedRow, other);
+        if (!pair) continue;
+        swapRangesInRow(clonedRow, moved.startCol, 2, pair[0].startCol, 2);
+      } else {
+        continue;
+      }
+        const after = evaluateConflictScore(cloned);
+        if (after < before && (!best || after < best.after)) {
+          best = {
+            movedCardId: card.id,
+            candidateCardId: candidate.id,
+            after,
+            candidateName: normalizeText(candidate.name),
+            candidateCols: candidate.span === 2 ? cardColumns(candidate) : (getContiguousSinglePair(row, candidate)?.map(c => c.startCol) || cardColumns(candidate)),
+            movedCols: cardColumns(card),
+            targetCols,
+          };
+        }
+      }
+
+      if (!best) {
+        return {
+          type: 'warning',
+          movedCardId: card.id,
+          message: `Kolize v čase ${targetCols.map(colLabel).join(', ')}.`,
+          detail: 'V tomhle řádku jsem nenašel jednoduchou výměnu, která by počet kolizí snížila.',
+        };
+      }
+
+      return {
+        type: 'swap',
+        movedCardId: best.movedCardId,
+        candidateCardId: best.candidateCardId,
+        message: best.candidateName
+          ? `Navržená výměna: „${normalizeText(card.name) || 'prázdná kartička'}“ ↔ „${best.candidateName}“.`
+          : 'Navržený přesun na prázdnou kartičku v řádku.',
+        detail: `Přesun ${best.movedCols.map(colLabel).join(', ')} ↔ ${best.candidateCols.map(colLabel).join(', ')} sníží kolize v čase ${best.targetCols.map(colLabel).join(', ')}.`,
+      };
+    }
+
+    function autoFixConflicts(model) {
+      let working = deepClone(model);
+      let changed = false;
+      let loops = 0;
+
+      while (loops < 100) {
+        loops += 1;
+        const before = evaluateConflictScore(working);
+        const conflicts = getConflicts(working).groups;
+        if (!conflicts.length) break;
+
+        let improved = false;
+        for (const row of working.rowData) {
+          for (const card of row.cards) {
+            const relevant = conflicts.filter(group => group.some(item => item.cardId === card.id));
+            if (!relevant.length) continue;
+
+            let bestCandidate = null;
+            for (const candidate of row.cards) {
+              if (candidate.id === card.id) continue;
+              const cloned = deepClone(working);
+              const clonedRow = getRowById(cloned, row.id);
+              const a = clonedRow.cards.find(x => x.id === card.id);
+              const b = clonedRow.cards.find(x => x.id === candidate.id);
+              const tmp = a.startCol;
+              a.startCol = b.startCol;
+              b.startCol = tmp;
+              const score = evaluateConflictScore(cloned);
+              if (score < before && (!bestCandidate || score < bestCandidate.score)) {
+                bestCandidate = { score, candidateId: candidate.id };
+              }
+            }
+
+            if (bestCandidate) {
+              const a = row.cards.find(x => x.id === card.id);
+              const b = row.cards.find(x => x.id === bestCandidate.candidateId);
+              const tmp = a.startCol;
+              a.startCol = b.startCol;
+              b.startCol = tmp;
+              improved = true;
+              changed = true;
+              break;
+            }
+          }
+          if (improved) break;
+        }
+        if (!improved) break;
+      }
+
+      return { model: working, changed };
+    }
+
+    function exportToWorkbook(model) {
+      const totalRows = Math.max(...model.rowData.map(r => r.rowIndex), HEADER_LABEL_ROW) + 1;
+      const totalCols = model.maxCols;
+      const data = Array.from({ length: totalRows }, () => Array.from({ length: totalCols }, () => ''));
+      data[HEADER_TITLE_ROW][0] = model.title;
+      for (let c = 0; c < totalCols; c += 1) data[HEADER_LABEL_ROW][c] = model.headerRow[c] ?? '';
+
+      for (const row of model.rowData) {
+        for (let c = 0; c < FIXED_COLS; c += 1) data[row.rowIndex][c] = row.fixed[c] ?? '';
+        for (const card of row.cards) {
+          for (let i = 0; i < card.span; i += 1) data[row.rowIndex][card.startCol + i] = card.name ?? '';
+        }
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 12 } }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'kolečko');
+      return wb;
+    }
+
+    function getTeacherColor(name) {
+      const n = normalizeText(name);
+      if (!n) return { bg: '#ffffff', border: '#cbd5e1' };
+      return {
+        bg: '#f3f4f6',
+        border: 'rgba(148,163,184,.42)'
+      };
+    }
+
+    function getSelectedTeacherKeys() {
+      if (!state.model || !state.selectedCardId) return new Set();
+      const found = findCardById(state.model, state.selectedCardId);
+      if (!found) return new Set();
+      return new Set(splitTeachers(found.card.name).map(normalizeTeacherKey));
+    }
+
+    function setMessage(type, title, detail) {
+      state.message = { type, title, detail };
+      renderPanels();
+    }
+
+    function updateCardName(cardId, name) {
+      const next = deepClone(state.model);
+      const found = findCardById(next, cardId);
+      if (!found) return;
+      found.card.name = name;
+      state.model = next;
+      state.lastMovedCardId = cardId;
+      state.editingCardId = null;
+      state.editingDraft = '';
+      render();
+    }
+
+    function moveCardWithinRow(cardId, targetCol) {
+      const next = deepClone(state.model);
+      const found = findCardById(next, cardId);
+      if (!found) return false;
+      const { row, card } = found;
+      if (!canPlace(row, card, targetCol, next.timelineCols)) {
+        setMessage('error', 'Sem kartičku nelze přesunout', 'Kartičku lze dát jen do volného místa a jen v jejím původním řádku.');
+        return false;
+      }
+      const cells = rowToCellValues(row, next.timelineCols);
+      cardColumns(card).forEach(col => { cells[col] = ''; });
+      for (let i = 0; i < card.span; i += 1) cells[targetCol + i] = card.name ?? '';
+      rebuildRowCards(row, next.timelineCols, cells);
+      state.model = next;
+      state.lastMovedCardId = cardId;
+      state.selectedCardId = null;
+      setMessage('ok', 'Kartička přesunuta', `Kartička je nově na pozici ${colLabel(targetCol)}.`);
+      render();
+      return true;
+    }
+
+    function swapCardsFlexible(cardAId, cardBId) {
+      const next = deepClone(state.model);
+      const a = findCardById(next, cardAId);
+      const b = findCardById(next, cardBId);
+      if (!a || !b) return false;
+      if (a.row.id !== b.row.id) {
+        setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
+        return false;
+      }
+      const row = a.row;
+
+      if (a.card.span === b.card.span) {
+        swapRangesInRow(row, a.card.startCol, a.card.span, b.card.startCol, b.card.span);
+        state.model = next;
+        state.lastMovedCardId = cardAId;
+        state.selectedCardId = null;
+        setMessage('ok', 'Kartičky prohozeny', 'Pozice kartiček jsem v řádku prohodil.');
+        render();
+        return true;
+      }
+
+      if (a.card.span === 2 && b.card.span === 1) {
+        const pair = getContiguousSinglePair(row, b.card);
+        if (!pair) {
+          setMessage('error', 'Přesun nelze provést', 'Desetiminutovou kartičku lze přesunout jen na dvě sousední pětiminutové kartičky ve stejném řádku.');
+          return false;
+        }
+        swapRangesInRow(row, a.card.startCol, 2, pair[0].startCol, 2);
+        state.model = next;
+        state.lastMovedCardId = cardAId;
+        state.selectedCardId = null;
+        setMessage('ok', 'Kartičky prohozeny', 'Desetiminutovou kartičku jsem vyměnil za dvojici pětiminutových políček.');
+        render();
+        return true;
+      }
+
+      if (a.card.span === 1 && b.card.span === 2) {
+        swapRangesInRow(row, a.card.startCol, 1, b.card.startCol, 1);
+        state.model = next;
+        state.lastMovedCardId = cardAId;
+        state.selectedCardId = null;
+        setMessage('ok', 'Kartička přesunuta', 'Pětiminutovou kartičku jsem vložil do první poloviny desetiminutového bloku. Druhá polovina zůstala zachovaná.');
+        render();
+        return true;
+      }
+
+      return false;
+    }
+
+    function handleCardClick(cardId) {
+      const selected = state.selectedCardId;
+      if (!selected) {
+        state.selectedCardId = cardId;
+        state.lastMovedCardId = cardId;
+        state.message = { type: 'info', title: 'Vybraná kartička', detail: 'Teď klikni na cílové místo ve stejném řádku. Karta se po přesunu automaticky odznačí.' };
+        render();
+        return;
+      }
+      if (selected === cardId) {
+        render();
+        return;
+      }
+      placeSelectedAtTarget(selected, cardId);
+    }
+
+    function startInlineEdit(cardId) {
+
+      const found = findCardById(state.model, cardId);
+      if (!found) return;
+      state.selectedCardId = cardId;
+      state.editingCardId = cardId;
+      state.editingDraft = found.card.name || '';
+      render();
+    }
+
+    function commitInlineEdit() {
+      if (!state.editingCardId) return;
+      updateCardName(state.editingCardId, state.editingDraft || '');
+    }
+
+    function cancelInlineEdit() {
+      state.editingCardId = null;
+      state.editingDraft = '';
+      render();
+    }
+
+    function handleSlotClick(rowId, col) {
+      if (!state.selectedCardId) return;
+      const selected = findCardById(state.model, state.selectedCardId);
+      if (!selected) return;
+      if (selected.row.id !== rowId) {
+        setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
+        return;
+      }
+      moveSelectedToEmptySlot(state.selectedCardId, col);
+    }
+
+    function renderPanels() {
+      const msg = state.message;
+      messageEl.innerHTML = msg ? `<div class="alert ${msg.type}"><strong>${escapeHtml(msg.title)}</strong>${escapeHtml(msg.detail)}</div>` : '';
+
+      if (!state.model) {
+        infoPanel.style.display = state.message ? '' : 'none';
+        conflictsEl.innerHTML = '';
+        suggestionEl.innerHTML = '';
+        return;
+      }
+
+      const conflictState = getConflicts(state.model);
+      if (conflictState.groups.length) {
+        conflictsEl.innerHTML = `
+          <div class="alert warn">
+            <strong>Nalezené kolize</strong>
+            <div class="conflict-list">
+              ${conflictState.groups.map(group => `<div>Učitel <strong>${escapeHtml(group[0].teacher)}</strong> je víckrát v čase <strong>${escapeHtml(state.model.headerRow[group[0].col] || colLabel(group[0].col))}</strong>.</div>`).join('')}
+            </div>
+          </div>`;
+      } else {
+        conflictsEl.innerHTML = '';
+      }
+
+      const suggestion = state.lastMovedCardId ? buildSuggestion(state.model, state.lastMovedCardId) : null;
+      infoPanel.style.display = (msg || conflictState.groups.length || suggestion) ? '' : 'none';
+      if (!suggestion) {
+        suggestionEl.innerHTML = '';
+      } else {
+        suggestionEl.innerHTML = `
+          <div class="alert ${suggestion.type === 'swap' ? 'info' : 'warn'}">
+            <strong>${escapeHtml(suggestion.message)}</strong>
+            ${escapeHtml(suggestion.detail)}
+            ${suggestion.type === 'swap' ? '<div class="action-row"><button id="applySuggestionBtn">Provést navrženou výměnu</button></div>' : ''}
+          </div>`;
+        const btn = document.getElementById('applySuggestionBtn');
+        if (btn) btn.onclick = applySuggestedSwap;
+      }
+    }
+
+    function render() {
+      titleEl.textContent = state.model?.title || 'Rozpis třídních schůzek';
+      fileNameEl.textContent = state.fileName ? `Soubor: ${state.fileName}` : '';
+      const preservedScrollTop = gridWrap ? gridWrap.scrollTop : 0;
+      const preservedScrollLeft = gridWrap ? gridWrap.scrollLeft : 0;
+      autoFixBtn.disabled = !state.model;
+      downloadBtn.disabled = !state.model;
+      gridPanel.style.display = state.model ? '' : 'none';
+      infoPanel.style.display = state.model || state.message ? '' : 'none';
+      renderPanels();
+
+      if (!state.model) {
+        gridEl.innerHTML = '';
+        return;
+      }
+
+      const model = state.model;
+      const conflictState = getConflicts(model);
+      state.fixedWidths = computeFixedWidths(model);
+      gridEl.style.gridTemplateColumns = `${state.fixedWidths[0]}px ${state.fixedWidths[1]}px ${state.fixedWidths[2]}px repeat(${model.timelineCols.length}, ${CELL_W}px)`;
+
+      const parts = [];
+      model.fixedHeader.forEach((label, idx) => {
+        parts.push(`<div class="cell fixed-head">${escapeHtml(label || colLabel(idx))}</div>`);
+      });
+
+      model.timelineCols.forEach(col => {
+        parts.push(`<div class="cell head time-head ">${escapeHtml(model.headerRow[col] || colLabel(col))}</div>`);
+      });
+
+      model.rowData.forEach(row => {
+        row.fixed.forEach((value, idx) => {
+          parts.push(`<div class="cell fixed-cell ${idx === 0 ? 'fixed-strong' : ''}">${escapeHtml(value)}</div>`);
+        });
+
+        parts.push(`<div class="row-track" style="grid-column: 4 / span ${model.timelineCols.length}; width:${model.timelineCols.length * CELL_W}px;">
+          <div class="slot-row">${renderSlots(row)}</div>
+          ${row.cards.map(card => renderCard(card, conflictState.cardIds)).join('')}
+        </div>`);
+      });
+
+      gridEl.innerHTML = parts.join('');
+      attachEvents();
+      if (gridWrap) {
+        gridWrap.scrollTop = preservedScrollTop;
+        gridWrap.scrollLeft = preservedScrollLeft;
+      }
+    }
+
+    function renderSlots(row) {
+      const selected = state.selectedCardId ? findCardById(state.model, state.selectedCardId) : null;
+      return state.model.timelineCols.map(col => {
+        const occupied = row.cards.some(card => cardColumns(card).includes(col));
+        const targetable = selected && selected.row.id === row.id && !occupied && canPlace(row, selected.card, col, state.model.timelineCols);
+        return `<div class="slot-cell ${occupied ? 'occupied' : ''} ${targetable ? 'targetable' : ''}" data-row-id="${row.id}" data-col="${col}"></div>`;
+      }).join('');
+    }
+
+    function renderCard(card, conflictCardIds) {
+      const left = (card.startCol - FIXED_COLS) * CELL_W + 4;
+      const width = card.span * CELL_W - 8;
+      const isSelected = state.selectedCardId === card.id;
+      const name = normalizeText(card.name);
+      const duration = card.span === 2 ? '10 min' : '5 min';
+      const color = getTeacherColor(name);
+      const selectedTeacherKeys = getSelectedTeacherKeys();
+      const sameTeacher = name && splitTeachers(card.name).some(t => selectedTeacherKeys.has(normalizeTeacherKey(t)));
+      const isConflict = conflictCardIds.has(card.id);
+      const style = name
+        ? `left:${left}px;width:${width}px;background:${color.bg};`
+        : `left:${left}px;width:${width}px;`;
+
+      const editing = state.editingCardId === card.id;
+      if (!name) {
+        return `
+          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected' : ''}" data-card-id="${card.id}" style="${style}">
+            ${editing
+              ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
+              : `<div class="plus" data-edit-empty-id="${card.id}">+</div>`}
+          </div>`;
+      }
+
+      const classes = ['card'];
+      if (sameTeacher) classes.push('same-teacher');
+      if (isConflict) classes.push('conflict');
+      if (isSelected) classes.push('selected');
+
+      return `
+        <div class="${classes.join(' ')}" data-card-id="${card.id}" style="${style}">
+          ${editing
+            ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
+            : `<div class="card-name" data-edit-text-id="${card.id}">${escapeHtml(name)}</div>`}
+          <div class="card-time">${duration}</div>
+        </div>`;
+    }
+
+    function attachEvents() {
+
+      gridEl.querySelectorAll('[data-card-id]').forEach(cardEl => {
+        cardEl.addEventListener('click', e => {
+          if (e.target.closest('.card-name-edit')) return;
+          e.stopPropagation();
+          handleCardClick(cardEl.dataset.cardId);
+        });
+      });
+
+      gridEl.querySelectorAll('[data-edit-text-id]').forEach(nameEl => {
+        nameEl.addEventListener('dblclick', e => {
+          e.stopPropagation();
+          startInlineEdit(nameEl.dataset.editTextId);
+        });
+      });
+
+      gridEl.querySelectorAll('[data-edit-empty-id]').forEach(emptyEl => {
+        emptyEl.addEventListener('dblclick', e => {
+          e.stopPropagation();
+          startInlineEdit(emptyEl.dataset.editEmptyId);
+        });
+      });
+
+      gridEl.querySelectorAll('.slot-cell').forEach(cell => {
+        cell.addEventListener('click', e => {
+          e.stopPropagation();
+          if (cell.classList.contains('occupied')) return;
+          handleSlotClick(cell.dataset.rowId, Number(cell.dataset.col));
+        });
+      });
+
+      gridEl.querySelectorAll('[data-edit-card-id]').forEach(editable => {
+        editable.addEventListener('click', e => e.stopPropagation());
+        editable.addEventListener('input', e => {
+          state.editingDraft = e.target.textContent || '';
+        });
+        editable.addEventListener('blur', () => commitInlineEdit());
+        editable.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commitInlineEdit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelInlineEdit();
+          }
+        });
+        setTimeout(() => {
+          editable.focus({ preventScroll: true });
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editable);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }, 0);
+      });
+    }
+
+    function applySuggestedSwap() {
+      const suggestion = state.lastMovedCardId ? buildSuggestion(state.model, state.lastMovedCardId) : null;
+      if (!suggestion || suggestion.type !== 'swap') return;
+      swapCardsFlexible(suggestion.movedCardId, suggestion.candidateCardId);
+      state.message = { type: 'ok', title: 'Navržená výměna provedena', detail: suggestion.detail };
+      render();
+    }
+
+    function runAutoFix() {
+
+      if (!state.model) return;
+      const result = autoFixConflicts(state.model);
+      state.model = result.model;
+      state.selectedCardId = null;
+      state.editingCardId = null;
+      state.editingDraft = '';
+      state.message = result.changed
+        ? { type: 'ok', title: 'Automatická oprava dokončena', detail: 'Aplikace provedla výměny, které snížily počet kolizí.' }
+        : { type: 'error', title: 'Žádná jednoduchá oprava nenalezena', detail: 'Zkus ruční přesuny nebo úpravu jmen dvojklikem na kartičku.' };
+      render();
+    }
+
+    function downloadWorkbook() {
+      if (!state.model) return;
+      const wb = exportToWorkbook(state.model);
+      const outName = state.fileName ? state.fileName.replace(/\.xlsx?$/i, '') + '-upraveno.xlsx' : 'rozpis-upraveno.xlsx';
+      XLSX.writeFile(wb, outName);
+    }
+
+    function resetApp() {
+      state = { model: null, fileName: '', lastMovedCardId: null, message: null, selectedCardId: null, editingCardId: null, editingDraft: '', fixedWidths: [70, 70, 70] };
+      fileInput.value = '';
+      render();
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+    }
+
+    fileInput.addEventListener('change', async e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      state.fileName = file.name;
+      try {
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const sheet = wb.Sheets['kolečko'];
+        if (!sheet) {
+          setMessage('error', 'Chybí list „kolečko“', 'Soubor se načetl, ale požadovaný list v něm není.');
+          return;
+        }
+        state.model = parseSheetToModel(sheet);
+        state.fixedWidths = computeFixedWidths(state.model);
+        state.lastMovedCardId = null;
+        state.selectedCardId = null;
+        state.editingCardId = null;
+        state.editingDraft = '';
+        state.message = { type: 'ok', title: 'Soubor načten', detail: 'Kartičky teď přesouváš kliknutím: klik na kartu, pak klikni na cílové místo ve stejném řádku. Karta se po umístění sama odznačí. Dvojklik na text nebo na plus upraví jméno přímo v kartě.' };
+        render();
+      } catch (err) {
+        setMessage('error', 'Načtení se nepovedlo', err?.message || 'Soubor se nepodařilo zpracovat.');
+      }
+    });
+
+    autoFixBtn.addEventListener('click', runAutoFix);
+    downloadBtn.addEventListener('click', downloadWorkbook);
+    resetBtn.addEventListener('click', resetApp);
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('#grid')) {
+        if (state.editingCardId) commitInlineEdit();
+        if (state.selectedCardId) {
+          state.selectedCardId = null;
+          render();
+        }
+        return;
+      }
+
+      if (!e.target.closest('[data-card-id]') && !e.target.closest('.slot-cell')) {
+        if (state.editingCardId) commitInlineEdit();
+        if (state.selectedCardId) {
+          state.selectedCardId = null;
+          render();
+        }
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>
