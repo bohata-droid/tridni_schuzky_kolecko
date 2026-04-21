@@ -24,7 +24,7 @@
       --selected: #1d4ed8;
       --shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
       --cell-w: 132px;
-      --cell-h: 62px;
+      --cell-h: 38px;
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
     * { box-sizing: border-box; }
@@ -58,7 +58,7 @@
       margin-top: 14px; padding: 14px 16px; border-radius: 18px; border: 1px solid;
       font-size: 14px;
     }
-    .alert strong { display: block; margin-bottom: 2px; }
+    .alert strong { display: block; margin-bottom: 0; }
     .alert.ok { background: var(--ok-bg); border-color: var(--ok-line); }
     .alert.warn { background: var(--warn-bg); border-color: var(--warn-line); }
     .alert.error { background: var(--err-bg); border-color: var(--err-line); }
@@ -81,8 +81,8 @@
       border-right: 1px solid var(--line-soft);
       border-bottom: 1px solid var(--line-soft);
       background: white;
-      padding: 8px;
-      min-height: 46px;
+      padding: 5px 8px;
+      min-height: 34px;
       font-size: 14px;
       display: flex;
       align-items: center;
@@ -131,15 +131,15 @@
     .slot-cell.targetable { background: #dbeafe; }
     .card {
       position: absolute;
-      top: 4px;
-      height: calc(var(--cell-h) - 8px);
+      top: 2px;
+      height: calc(var(--cell-h) - 4px);
       border: 1px solid rgba(148,163,184,.42);
-      border-radius: 20px;
+      border-radius: 14px;
       box-shadow: 0 4px 12px rgba(15,23,42,.05);
       display: flex;
       flex-direction: column;
       justify-content: center;
-      padding: 6px 10px;
+      padding: 2px 8px;
       cursor: pointer;
       user-select: none;
       overflow: hidden;
@@ -177,7 +177,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 2px;
+      margin-bottom: 0;
       cursor: text;
     }
     .card-name-edit {
@@ -187,7 +187,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 2px;
+      margin-bottom: 0;
       cursor: text;
       outline: none;
       border: none;
@@ -201,11 +201,6 @@
       content: attr(data-placeholder);
       color: #cbd5e1;
       font-weight: 400;
-    }
-    .card-time {
-      font-size: 11px;
-      color: rgba(15,23,42,.72);
-      font-weight: 600;
     }
     .card-empty {
       align-items: center;
@@ -227,7 +222,7 @@
       border-style: solid;
       background: #ffffff;
     }
-    .card-empty .card-time { color: #94a3b8; }
+    .card-empty
     .conflict-list > div { margin-top: 6px; }
     .action-row { margin-top: 10px; }
     @media (max-width: 1100px) {
@@ -258,6 +253,25 @@
   box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
 }
 
+
+.card.span-2 {
+  background: #f5efe6 !important;
+}
+.card[data-span="2"] {
+  background: #f5efe6 !important;
+}
+
+
+.card[data-span="1"] {
+  background: #eef5fb !important;
+}
+
+
+/* Empty slots pure white */
+.card.empty, .card[data-empty="true"] {
+  background: #ffffff !important;
+}
+
 </style>
 </head>
 <body>
@@ -273,6 +287,11 @@
           Načíst Excel
           <input id="fileInput" type="file" accept=".xlsx,.xls" />
         </label>
+        <label class="file-btn">
+          Načíst rozdělanou práci
+          <input id="projectInput" type="file" accept=".schuzky.json,.json,application/json" />
+        </label>
+        <button id="saveProjectBtn" disabled>Uložit rozdělanou práci</button>
         <button id="autoFixBtn" disabled>Opravit kolize</button>
         <button id="downloadBtn" disabled>Stáhnout upravený Excel</button>
         <button id="resetBtn">Reset</button>
@@ -293,7 +312,7 @@
         <div class="info-box">První tři sloupce mají jen <strong>nutnou šířku podle textu</strong>.</div>
         <div class="info-box">Fixovaný je jen <strong>horní řádek s časy</strong>.</div>
         <div class="info-box">Klik na kartu ji <strong>vybere</strong>, další klik ji <strong>umístí</strong>.</div>
-        <div class="info-box">Dvojklik na text nebo na <strong>+</strong> upraví jméno přímo v kartě.</div>
+        <div class="info-box">Dvojklik na text nebo na <strong>+</strong> upraví jméno přímo v kartě. Rozdělanou práci můžeš uložit a znovu načíst.</div>
       </div>
       <div id="message"></div>
       <div id="conflicts"></div>
@@ -322,6 +341,8 @@
     };
 
     const fileInput = document.getElementById('fileInput');
+    const projectInput = document.getElementById('projectInput');
+    const saveProjectBtn = document.getElementById('saveProjectBtn');
     const autoFixBtn = document.getElementById('autoFixBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const resetBtn = document.getElementById('resetBtn');
@@ -990,6 +1011,7 @@
       fileNameEl.textContent = state.fileName ? `Soubor: ${state.fileName}` : '';
       const preservedScrollTop = gridWrap ? gridWrap.scrollTop : 0;
       const preservedScrollLeft = gridWrap ? gridWrap.scrollLeft : 0;
+      saveProjectBtn.disabled = !state.model;
       autoFixBtn.disabled = !state.model;
       downloadBtn.disabled = !state.model;
       gridPanel.style.display = state.model ? '' : 'none';
@@ -1048,7 +1070,6 @@
       const width = card.span * CELL_W - 8;
       const isSelected = state.selectedCardId === card.id;
       const name = normalizeText(card.name);
-      const duration = card.span === 2 ? '10 min' : '5 min';
       const color = getTeacherColor(name);
       const selectedTeacherKeys = getSelectedTeacherKeys();
       const sameTeacher = name && splitTeachers(card.name).some(t => selectedTeacherKeys.has(normalizeTeacherKey(t)));
@@ -1060,7 +1081,7 @@
       const editing = state.editingCardId === card.id;
       if (!name) {
         return `
-          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected-card' : ''}" data-card-id="${card.id}" style="${style}">
+          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected-card' : ''}" data-card-id="${card.id}" data-span="${card.span}" data-empty="${!name ? 'true' : 'false'}" style="${style}">
             ${editing
               ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
               : `<div class="plus" data-edit-empty-id="${card.id}">+</div>`}
@@ -1073,11 +1094,10 @@
       if (isSelected) classes.push('selected');
 
       return `
-        <div class="${classes.join(' ')}" data-card-id="${card.id}" style="${style}">
+        <div class="${classes.join(' ')}" data-card-id="${card.id}" data-span="${card.span}" data-empty="${!name ? 'true' : 'false'}" style="${style}">
           ${editing
             ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
             : `<div class="card-name" data-edit-text-id="${card.id}">${escapeHtml(name)}</div>`}
-          <div class="card-time">${duration}</div>
         </div>`;
     }
 
@@ -1168,9 +1188,52 @@
       XLSX.writeFile(wb, outName);
     }
 
+
+    function downloadBlob(fileName, mimeType, content) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function saveProject() {
+      if (!state.model) return;
+      const payload = {
+        app: 'rozpis-tridnich-schuzek',
+        version: 1,
+        savedAt: new Date().toISOString(),
+        fileName: state.fileName || '',
+        model: state.model
+      };
+      const base = (state.fileName || 'rozpis-tridnich-schuzek').replace(/\.[^.]+$/,'');
+      downloadBlob(base + '.schuzky.json', 'application/json;charset=utf-8', JSON.stringify(payload, null, 2));
+      setMessage('ok', 'Rozdělaná práce uložena', 'Stáhl se soubor aplikace. Ten můžeš později znovu načíst tlačítkem „Načíst rozdělanou práci“.');
+    }
+
+    function loadProjectObject(payload) {
+      if (!payload || payload.app !== 'rozpis-tridnich-schuzek' || !payload.model || !Array.isArray(payload.model.rowData)) {
+        throw new Error('Soubor rozdělané práce není ve správném formátu.');
+      }
+      state.model = payload.model;
+      state.fileName = payload.fileName || 'Rozdělaná práce';
+      state.fixedWidths = computeFixedWidths(state.model);
+      state.lastMovedCardId = null;
+      state.selectedCardId = null;
+      state.editingCardId = null;
+      state.editingDraft = '';
+      state.message = { type: 'ok', title: 'Rozdělaná práce načtena', detail: 'Obnovil jsem uložený stav aplikace včetně všech přesunů a úprav.' };
+      render();
+    }
+
     function resetApp() {
       state = { model: null, fileName: '', lastMovedCardId: null, message: null, selectedCardId: null, editingCardId: null, editingDraft: '', fixedWidths: [70, 70, 70] };
       fileInput.value = '';
+      if (projectInput) projectInput.value = '';
       render();
     }
 
@@ -1196,13 +1259,28 @@
         state.selectedCardId = null;
         state.editingCardId = null;
         state.editingDraft = '';
-        state.message = { type: 'ok', title: 'Soubor načten', detail: 'Kartičky teď přesouváš kliknutím: klik na kartu, pak klikni na cílové místo ve stejném řádku. Karta se po umístění sama odznačí. Dvojklik na text nebo na plus upraví jméno přímo v kartě.' };
+        state.message = { type: 'ok', title: 'Soubor načten', detail: 'Kartičky teď přesouváš kliknutím: klik na kartu, pak klikni na cílové místo ve stejném řádku. Karta se po umístění sama odznačí. Dvojklik na text nebo na plus upraví jméno přímo v kartě. Rozdělanou práci můžeš uložit vlastním souborem aplikace.' };
         render();
       } catch (err) {
         setMessage('error', 'Načtení se nepovedlo', err?.message || 'Soubor se nepodařilo zpracovat.');
       }
     });
 
+
+    projectInput.addEventListener('change', async e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        loadProjectObject(payload);
+      } catch (err) {
+        setMessage('error', 'Načtení rozdělané práce se nepovedlo', err?.message || 'Soubor se nepodařilo načíst.');
+        render();
+      }
+    });
+
+    saveProjectBtn.addEventListener('click', saveProject);
     autoFixBtn.addEventListener('click', runAutoFix);
     downloadBtn.addEventListener('click', downloadWorkbook);
     resetBtn.addEventListener('click', resetApp);
