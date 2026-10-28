@@ -21,7 +21,6 @@
       --err-line: #fca5a5;
       --blue-bg: #eff6ff;
       --blue-line: #93c5fd;
-      --selected: #1d4ed8;
       --shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
       --cell-w: 132px;
       --cell-h: 38px;
@@ -52,6 +51,11 @@
     button:disabled { opacity: .5; cursor: not-allowed; }
     input[type=file] { display: none; }
     .filename { font-size: 14px; color: var(--muted); }
+    dialog { width: min(850px, 92vw); border: 1px solid var(--line); border-radius: 20px; padding: 24px; }
+    dialog::backdrop { background: rgba(15, 23, 42, .4); }
+    dialog h2 { margin-top: 0; }
+    .clipboard-text { display: block; width: 100%; min-height: 240px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; white-space: pre; }
+    .clipboard-error { color: #b91c1c; }
     .info-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-top: 16px; }
     .info-box { background: #f8fafc; border-radius: 16px; padding: 14px; color: #334155; font-size: 14px; }
     .alert {
@@ -158,18 +162,6 @@
       outline-offset: -2px;
       box-shadow: 0 0 0 1px rgba(220,38,38,.08), 0 6px 16px rgba(15,23,42,.08);
     }
-    .card.selected {
-      outline: 4px solid #22c55e !important;
-      outline-offset: -2px;
-      background: #dcfce7 !important;
-      box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
-    }
-    .card.selected.conflict {
-      outline: 4px solid #22c55e !important;
-      outline-offset: -2px;
-      background: #dcfce7 !important;
-      box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
-    }
     .card-name {
       font-size: 13px;
       font-weight: 700;
@@ -206,7 +198,6 @@
       align-items: center;
       text-align: center;
       color: #94a3b8;
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
       border-style: dashed;
       border-color: rgba(148,163,184,.45);
       justify-content: center;
@@ -222,7 +213,6 @@
       border-style: solid;
       background: #ffffff;
     }
-    .card-empty
     .conflict-list > div { margin-top: 6px; }
     .action-row { margin-top: 10px; }
     @media (max-width: 1100px) {
@@ -232,47 +222,17 @@
       .app { padding: 12px; }
       .info-grid { grid-template-columns: 1fr; }
     }
-  
-.card.selected-strong{border:3px solid #22c55e !important; box-shadow:0 0 0 2px #22c55e !important;}
 
-.selected-card {
-  outline: 4px solid #22c55e !important;
-  outline-offset: -2px;
-  background: #dcfce7 !important;
-  box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
-}
-
-
-.card.selected,
-.card.selected.conflict,
-.card.selected.same-teacher,
-.selected-card {
-  outline: 4px solid #22c55e !important;
-  outline-offset: -2px !important;
-  background: #dcfce7 !important;
-  box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10) !important;
-}
-
-
-.card.span-2 {
-  background: #f5efe6 !important;
-}
-.card[data-span="2"] {
-  background: #f5efe6 !important;
-}
-
-
-.card[data-span="1"] {
-  background: #eef5fb !important;
-}
-
-
-/* Empty slots pure white */
-.card.empty, .card[data-empty="true"] {
-  background: #ffffff !important;
-}
-
-</style>
+    .card[data-span="1"] { background: #eef5fb; }
+    .card[data-span="2"] { background: #f5efe6; }
+    .card.card-empty { background: #ffffff; }
+    .card.selected {
+      outline: 4px solid #22c55e;
+      outline-offset: -2px;
+      background: #dcfce7;
+      box-shadow: 0 0 0 1px rgba(34,197,94,.18), 0 8px 18px rgba(15,23,42,.10);
+    }
+  </style>
 </head>
 <body>
   <div class="app">
@@ -283,6 +243,8 @@
       </div>
 
       <div class="toolbar">
+        <button id="pasteTableBtn">Vložit tabulku ze schránky</button>
+        <button id="copyTableBtn" disabled>Kopírovat tabulku do schránky</button>
         <label class="file-btn primary">
           Načíst Excel
           <input id="fileInput" type="file" accept=".xlsx,.xls" />
@@ -297,7 +259,6 @@
         <button id="resetBtn">Reset</button>
         <div id="fileName" class="filename"></div>
       </div>
-
 
     </div>
 
@@ -320,13 +281,24 @@
     </div>
   </div>
 
+  <dialog id="clipboardDialog" aria-labelledby="clipboardTitle">
+    <h2 id="clipboardTitle">Vložit tabulku ze schránky</h2>
+    <p id="clipboardHelp"></p>
+    <label for="clipboardText">Tabulka</label>
+    <textarea id="clipboardText" class="clipboard-text" spellcheck="false"></textarea>
+    <p id="clipboardError" class="clipboard-error" role="alert"></p>
+    <div class="toolbar">
+      <button id="loadClipboardBtn" class="primary">Načíst tabulku</button>
+      <button id="closeClipboardBtn">Zavřít</button>
+    </div>
+  </dialog>
+
   <script>
     const FIXED_COLS = 3;
     const DATA_START_ROW = 2;
     const HEADER_TITLE_ROW = 0;
     const HEADER_LABEL_ROW = 1;
     const CELL_W = 132;
-    const CELL_H = 62;
     const MIN_FIXED_W = [54, 54, 54];
 
     let state = {
@@ -355,6 +327,15 @@
     const infoPanel = document.getElementById('infoPanel');
     const gridWrap = document.getElementById('gridWrap');
     const gridEl = document.getElementById('grid');
+    const pasteTableBtn = document.getElementById('pasteTableBtn');
+    const copyTableBtn = document.getElementById('copyTableBtn');
+    const clipboardDialog = document.getElementById('clipboardDialog');
+    const clipboardText = document.getElementById('clipboardText');
+    const clipboardTitle = document.getElementById('clipboardTitle');
+    const clipboardHelp = document.getElementById('clipboardHelp');
+    const clipboardError = document.getElementById('clipboardError');
+    const loadClipboardBtn = document.getElementById('loadClipboardBtn');
+    const closeClipboardBtn = document.getElementById('closeClipboardBtn');
 
     function normalizeText(value) {
       return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -404,6 +385,10 @@
 
     function parseSheetToModel(sheet) {
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+      return parseRowsToModel(rows);
+    }
+
+    function parseRowsToModel(rows) {
       let lastUsedCol = 0;
       let lastUsedRow = 0;
 
@@ -496,7 +481,6 @@
       return true;
     }
 
-
     function rowToCellValues(row, timelineCols) {
       const cells = {};
       timelineCols.forEach(col => { cells[col] = ''; });
@@ -550,7 +534,6 @@
       for (let i = 0; i < lenA; i += 1) cells[startB + i] = rangeA[i] ?? '';
       rebuildRowCards(row, timelineCols, cells);
     }
-
 
     function swapEqualCards(row, sourceCard, targetCard) {
       swapRangesInRow(row, sourceCard.startCol, sourceCard.span, targetCard.startCol, targetCard.span);
@@ -659,12 +642,10 @@
       }
       const groups = Array.from(teacherColumnMap.values()).filter(group => group.length > 1);
       const cardIds = new Set();
-      const columns = new Set();
       groups.forEach(group => group.forEach(item => {
         cardIds.add(item.cardId);
-        columns.add(item.col);
       }));
-      return { groups, cardIds, columns };
+      return { groups, cardIds };
     }
 
     function evaluateConflictScore(model) {
@@ -752,7 +733,8 @@
 
             let bestCandidate = null;
             for (const candidate of row.cards) {
-              if (candidate.id === card.id) continue;
+              // Swapping positions preserves coverage only for equally long cards.
+              if (candidate.id === card.id || candidate.span !== card.span) continue;
               const cloned = deepClone(working);
               const clonedRow = getRowById(cloned, row.id);
               const a = clonedRow.cards.find(x => x.id === card.id);
@@ -785,7 +767,7 @@
       return { model: working, changed };
     }
 
-    function exportToWorkbook(model) {
+    function modelToRows(model) {
       const totalRows = Math.max(...model.rowData.map(r => r.rowIndex), HEADER_LABEL_ROW) + 1;
       const totalCols = model.maxCols;
       const data = Array.from({ length: totalRows }, () => Array.from({ length: totalCols }, () => ''));
@@ -799,20 +781,15 @@
         }
       }
 
-      const ws = XLSX.utils.aoa_to_sheet(data);
+      return data;
+    }
+
+    function exportToWorkbook(model) {
+      const ws = XLSX.utils.aoa_to_sheet(modelToRows(model));
       ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 12 } }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'kolečko');
       return wb;
-    }
-
-    function getTeacherColor(name) {
-      const n = normalizeText(name);
-      if (!n) return { bg: '#ffffff', border: '#cbd5e1' };
-      return {
-        bg: '#f3f4f6',
-        border: 'rgba(148,163,184,.42)'
-      };
     }
 
     function getSelectedTeacherKeys() {
@@ -837,76 +814,6 @@
       state.editingCardId = null;
       state.editingDraft = '';
       render();
-    }
-
-    function moveCardWithinRow(cardId, targetCol) {
-      const next = deepClone(state.model);
-      const found = findCardById(next, cardId);
-      if (!found) return false;
-      const { row, card } = found;
-      if (!canPlace(row, card, targetCol, next.timelineCols)) {
-        setMessage('error', 'Sem kartičku nelze přesunout', 'Kartičku lze dát jen do volného místa a jen v jejím původním řádku.');
-        return false;
-      }
-      const cells = rowToCellValues(row, next.timelineCols);
-      cardColumns(card).forEach(col => { cells[col] = ''; });
-      for (let i = 0; i < card.span; i += 1) cells[targetCol + i] = card.name ?? '';
-      rebuildRowCards(row, next.timelineCols, cells);
-      state.model = next;
-      state.lastMovedCardId = cardId;
-      state.selectedCardId = null;
-      setMessage('ok', 'Kartička přesunuta', `Kartička je nově na pozici ${colLabel(targetCol)}.`);
-      render();
-      return true;
-    }
-
-    function swapCardsFlexible(cardAId, cardBId) {
-      const next = deepClone(state.model);
-      const a = findCardById(next, cardAId);
-      const b = findCardById(next, cardBId);
-      if (!a || !b) return false;
-      if (a.row.id !== b.row.id) {
-        setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
-        return false;
-      }
-      const row = a.row;
-
-      if (a.card.span === b.card.span) {
-        swapRangesInRow(row, a.card.startCol, a.card.span, b.card.startCol, b.card.span);
-        state.model = next;
-        state.lastMovedCardId = cardAId;
-        state.selectedCardId = null;
-        setMessage('ok', 'Kartičky prohozeny', 'Pozice kartiček jsem v řádku prohodil.');
-        render();
-        return true;
-      }
-
-      if (a.card.span === 2 && b.card.span === 1) {
-        const pair = getContiguousSinglePair(row, b.card);
-        if (!pair) {
-          setMessage('error', 'Přesun nelze provést', 'Desetiminutovou kartičku lze přesunout jen na dvě sousední pětiminutové kartičky ve stejném řádku.');
-          return false;
-        }
-        swapRangesInRow(row, a.card.startCol, 2, pair[0].startCol, 2);
-        state.model = next;
-        state.lastMovedCardId = cardAId;
-        state.selectedCardId = null;
-        setMessage('ok', 'Kartičky prohozeny', 'Desetiminutovou kartičku jsem vyměnil za dvojici pětiminutových políček.');
-        render();
-        return true;
-      }
-
-      if (a.card.span === 1 && b.card.span === 2) {
-        swapRangesInRow(row, a.card.startCol, 1, b.card.startCol, 1);
-        state.model = next;
-        state.lastMovedCardId = cardAId;
-        state.selectedCardId = null;
-        setMessage('ok', 'Kartička přesunuta', 'Pětiminutovou kartičku jsem vložil do první poloviny desetiminutového bloku. Druhá polovina zůstala zachovaná.');
-        render();
-        return true;
-      }
-
-      return false;
     }
 
     function handleCardClick(cardId) {
@@ -1014,6 +921,7 @@
       saveProjectBtn.disabled = !state.model;
       autoFixBtn.disabled = !state.model;
       downloadBtn.disabled = !state.model;
+      copyTableBtn.disabled = !state.model;
       gridPanel.style.display = state.model ? '' : 'none';
       infoPanel.style.display = state.model || state.message ? '' : 'none';
       renderPanels();
@@ -1034,7 +942,7 @@
       });
 
       model.timelineCols.forEach(col => {
-        parts.push(`<div class="cell head time-head ">${escapeHtml(model.headerRow[col] || colLabel(col))}</div>`);
+        parts.push(`<div class="cell head">${escapeHtml(model.headerRow[col] || colLabel(col))}</div>`);
       });
 
       model.rowData.forEach(row => {
@@ -1070,18 +978,15 @@
       const width = card.span * CELL_W - 8;
       const isSelected = state.selectedCardId === card.id;
       const name = normalizeText(card.name);
-      const color = getTeacherColor(name);
       const selectedTeacherKeys = getSelectedTeacherKeys();
       const sameTeacher = name && splitTeachers(card.name).some(t => selectedTeacherKeys.has(normalizeTeacherKey(t)));
       const isConflict = conflictCardIds.has(card.id);
-      const style = name
-        ? `left:${left}px;width:${width}px;background:${color.bg};`
-        : `left:${left}px;width:${width}px;`;
+      const style = `left:${left}px;width:${width}px;`;
 
       const editing = state.editingCardId === card.id;
       if (!name) {
         return `
-          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected-card' : ''}" data-card-id="${card.id}" data-span="${card.span}" data-empty="${!name ? 'true' : 'false'}" style="${style}">
+          <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected' : ''}" data-card-id="${card.id}" data-span="${card.span}" style="${style}">
             ${editing
               ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
               : `<div class="plus" data-edit-empty-id="${card.id}">+</div>`}
@@ -1094,7 +999,7 @@
       if (isSelected) classes.push('selected');
 
       return `
-        <div class="${classes.join(' ')}" data-card-id="${card.id}" data-span="${card.span}" data-empty="${!name ? 'true' : 'false'}" style="${style}">
+        <div class="${classes.join(' ')}" data-card-id="${card.id}" data-span="${card.span}" style="${style}">
           ${editing
             ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
             : `<div class="card-name" data-edit-text-id="${card.id}">${escapeHtml(name)}</div>`}
@@ -1162,7 +1067,7 @@
     function applySuggestedSwap() {
       const suggestion = state.lastMovedCardId ? buildSuggestion(state.model, state.lastMovedCardId) : null;
       if (!suggestion || suggestion.type !== 'swap') return;
-      swapCardsFlexible(suggestion.movedCardId, suggestion.candidateCardId);
+      if (!placeSelectedAtTarget(suggestion.movedCardId, suggestion.candidateCardId)) return;
       state.message = { type: 'ok', title: 'Navržená výměna provedena', detail: suggestion.detail };
       render();
     }
@@ -1181,13 +1086,107 @@
       render();
     }
 
+    // Excel uses tab-separated cells and quotes cells containing tabs or newlines.
+    function parseClipboardTable(text) {
+      const input = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+      const rows = [];
+      let row = [];
+      let cell = '';
+      let quoted = false;
+      for (let i = 0; i < input.length; i += 1) {
+        const char = input[i];
+        if (quoted) {
+          if (char === '"' && input[i + 1] === '"') {
+            cell += '"';
+            i += 1;
+          } else if (char === '"') {
+            quoted = false;
+          } else {
+            cell += char;
+          }
+        } else if (char === '"' && cell === '') {
+          quoted = true;
+        } else if (char === '\t') {
+          row.push(cell);
+          cell = '';
+        } else if (char === '\n') {
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = '';
+        } else {
+          cell += char;
+        }
+      }
+      if (quoted) throw new Error('Vložená tabulka obsahuje neuzavřené uvozovky. Zkopíruj ji z Excelu znovu.');
+      if (cell !== '' || row.length) rows.push([...row, cell]);
+      return rows;
+    }
+
+    function serializeClipboardTable(rows) {
+      return rows.map(row => row.map(value => {
+        const text = String(value ?? '');
+        return /[\t\r\n"]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+      }).join('\t')).join('\r\n');
+    }
+
+    function openClipboardDialog(mode, text = '') {
+      const copying = mode === 'copy';
+      clipboardTitle.textContent = copying ? 'Zkopírovat tabulku do Excelu' : 'Vložit tabulku ze schránky';
+      clipboardHelp.textContent = copying
+        ? 'Stiskni Ctrl+C (na Macu ⌘C), potom v Excelu vyber buňku A1 a vlož tabulku přes Ctrl+V (⌘V).'
+        : 'V Excelu označ celou tabulku včetně názvu v prvním řádku, záhlaví ve druhém a prvních tří sloupců. Zkopíruj ji přes Ctrl+C (⌘C), vlož sem přes Ctrl+V (⌘V) a klikni na Načíst tabulku. Načtení nahradí současný rozpis.';
+      clipboardText.value = text;
+      clipboardText.readOnly = copying;
+      clipboardError.textContent = '';
+      loadClipboardBtn.hidden = copying;
+      clipboardDialog.showModal();
+      clipboardText.focus();
+      if (copying) clipboardText.select();
+    }
+
+    function loadClipboardTable() {
+      try {
+        const rows = parseClipboardTable(clipboardText.value);
+        const model = parseRowsToModel(rows);
+        if (!model.timelineCols.length || !model.rowData.length ||
+            !model.timelineCols.some(col => normalizeText(model.headerRow[col]))) {
+          throw new Error('Vlož celou tabulku: název v prvním řádku, záhlaví s časy ve druhém a data od třetího řádku. První tři sloupce musí zůstat součástí tabulky.');
+        }
+        state.model = model;
+        state.fileName = 'Tabulka ze schránky';
+        state.lastMovedCardId = null;
+        state.selectedCardId = null;
+        state.editingCardId = null;
+        state.editingDraft = '';
+        state.message = { type: 'ok', title: 'Tabulka načtena ze schránky', detail: 'Rozpis můžeš upravit a potom zkopírovat zpět do Excelu tlačítkem Kopírovat tabulku do schránky.' };
+        clipboardDialog.close();
+        clipboardText.value = '';
+        render();
+      } catch (err) {
+        clipboardError.textContent = err?.message || 'Tabulku se nepodařilo načíst.';
+      }
+    }
+
+    async function copyTableToClipboard() {
+      if (state.editingCardId) commitInlineEdit();
+      if (!state.model) return;
+      const text = serializeClipboardTable(modelToRows(state.model));
+      try {
+        await navigator.clipboard.writeText(text);
+        setMessage('ok', 'Tabulka zkopírována', 'V Excelu vyber buňku A1 a vlož tabulku přes Ctrl+V (na Macu ⌘V).');
+      } catch {
+        // Manual copy also works when the browser does not allow clipboard access.
+        openClipboardDialog('copy', text);
+      }
+    }
+
     function downloadWorkbook() {
       if (!state.model) return;
       const wb = exportToWorkbook(state.model);
       const outName = state.fileName ? state.fileName.replace(/\.xlsx?$/i, '') + '-upraveno.xlsx' : 'rozpis-upraveno.xlsx';
       XLSX.writeFile(wb, outName);
     }
-
 
     function downloadBlob(fileName, mimeType, content) {
       const blob = new Blob([content], { type: mimeType });
@@ -1266,7 +1265,6 @@
       }
     });
 
-
     projectInput.addEventListener('change', async e => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -1281,6 +1279,11 @@
     });
 
     saveProjectBtn.addEventListener('click', saveProject);
+    pasteTableBtn.addEventListener('click', () => openClipboardDialog('paste'));
+    copyTableBtn.addEventListener('click', copyTableToClipboard);
+    loadClipboardBtn.addEventListener('click', loadClipboardTable);
+    closeClipboardBtn.addEventListener('click', () => clipboardDialog.close());
+    clipboardDialog.addEventListener('close', () => { clipboardText.value = ''; });
     autoFixBtn.addEventListener('click', runAutoFix);
     downloadBtn.addEventListener('click', downloadWorkbook);
     resetBtn.addEventListener('click', resetApp);
@@ -1306,24 +1309,6 @@
 
     render();
   </script>
-
-<script id="selected-card-fallback">
-(function() {
-  const origRender = window.render;
-  if (typeof origRender === 'function') {
-    window.render = function() {
-      const res = origRender.apply(this, arguments);
-      try {
-        if (window.state && window.state.selectedCardId) {
-          const el = document.querySelector('[data-card-id="' + window.state.selectedCardId + '"]');
-          if (el) el.classList.add('selected-card');
-        }
-      } catch (e) {}
-      return res;
-    };
-  }
-})();
-</script>
 
 </body>
 </html>
