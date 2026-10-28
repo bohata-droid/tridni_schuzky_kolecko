@@ -51,6 +51,9 @@
     button:disabled { opacity: .5; cursor: not-allowed; }
     input[type=file] { display: none; }
     .filename { font-size: 14px; color: var(--muted); }
+    .card .card-name, .card .card-name-edit { margin-right: 22px; }
+    .card.locked { border: 2px solid #475569; }
+    .card-lock { position: absolute; right: 2px; top: 3px; padding: 2px; border: 0; background: transparent; font-size: 14px; line-height: 20px; }
     dialog { width: min(850px, 92vw); border: 1px solid var(--line); border-radius: 20px; padding: 24px; }
     dialog::backdrop { background: rgba(15, 23, 42, .4); }
     dialog h2 { margin-top: 0; }
@@ -255,10 +258,12 @@
         </label>
         <button id="saveProjectBtn" disabled>Uložit rozdělanou práci</button>
         <button id="autoFixBtn" disabled>Opravit kolize</button>
+        <button id="generateBtn" disabled>Vygenerovat rozpis</button>
         <button id="downloadBtn" disabled>Stáhnout upravený Excel</button>
         <button id="resetBtn">Reset</button>
         <div id="fileName" class="filename"></div>
       </div>
+      <p class="filename">Zámkem na kartičce upevníš její pozici. Generátor zachová učitele i délky kartiček a hledá rozpis od prvního času bez mezer s co nejméně kolizemi. Zámky se ukládají do souboru rozdělané práce.</p>
 
     </div>
 
@@ -281,9 +286,22 @@
     </div>
   </div>
 
+  <dialog id="generatorDialog" aria-labelledby="generatorTitle">
+    <h2 id="generatorTitle">Generování rozpisu</h2>
+    <p id="generatorProgress" role="status">Hledám rozpis…</p>
+    <button id="cancelGeneratorBtn">Zrušit a ponechat původní rozpis</button>
+  </dialog>
+
   <dialog id="clipboardDialog" aria-labelledby="clipboardTitle">
     <h2 id="clipboardTitle">Vložit tabulku ze schránky</h2>
     <p id="clipboardHelp"></p>
+    <label id="clipboardHeaderLabel" for="clipboardHeaderMode">První řádek obsahuje:
+      <select id="clipboardHeaderMode">
+        <option value="auto">Rozpoznat automaticky</option>
+        <option value="header">Záhlaví tabulky (bez samostatného názvu)</option>
+        <option value="title">Název rozpisu (záhlaví je až pod ním)</option>
+      </select>
+    </label>
     <label for="clipboardText">Tabulka</label>
     <textarea id="clipboardText" class="clipboard-text" spellcheck="false"></textarea>
     <p id="clipboardError" class="clipboard-error" role="alert"></p>
@@ -316,6 +334,11 @@
     const projectInput = document.getElementById('projectInput');
     const saveProjectBtn = document.getElementById('saveProjectBtn');
     const autoFixBtn = document.getElementById('autoFixBtn');
+    const generateBtn = document.getElementById('generateBtn');
+    const generatorDialog = document.getElementById('generatorDialog');
+    const generatorProgress = document.getElementById('generatorProgress');
+    const cancelGeneratorBtn = document.getElementById('cancelGeneratorBtn');
+    let cancelGeneration = false;
     const downloadBtn = document.getElementById('downloadBtn');
     const resetBtn = document.getElementById('resetBtn');
     const titleEl = document.getElementById('title');
@@ -334,6 +357,8 @@
     const clipboardTitle = document.getElementById('clipboardTitle');
     const clipboardHelp = document.getElementById('clipboardHelp');
     const clipboardError = document.getElementById('clipboardError');
+    const clipboardHeaderMode = document.getElementById('clipboardHeaderMode');
+    const clipboardHeaderLabel = document.getElementById('clipboardHeaderLabel');
     const loadClipboardBtn = document.getElementById('loadClipboardBtn');
     const closeClipboardBtn = document.getElementById('closeClipboardBtn');
 
@@ -491,6 +516,7 @@
     }
 
     function rebuildRowCards(row, timelineCols, cellValues) {
+      const lockedCards = row.cards.filter(card => card.locked);
       const cards = [];
       let i = 0;
       while (i < timelineCols.length) {
@@ -510,6 +536,9 @@
         i += span;
       }
       row.cards = cards;
+      for (const card of row.cards) {
+        card.locked = lockedCards.some(locked => locked.startCol === card.startCol && locked.span === card.span && locked.name === card.name);
+      }
       return row;
     }
 
@@ -590,6 +619,11 @@
         return false;
       }
 
+      if (!locksPreserved(a.row, getRowById(state.model, a.row.id))) {
+        setMessage('error', 'Kartička je zamčená', 'Před přesunem odemkni kartičky, kterých se výměna dotýká.');
+        return false;
+      }
+
       state.model = next;
       state.lastMovedCardId = cardAId;
       state.selectedCardId = null;
@@ -611,6 +645,10 @@
       cardColumns(card).forEach(col => { cells[col] = ''; });
       for (let i = 0; i < card.span; i += 1) cells[targetCol + i] = card.name ?? '';
       rebuildRowCards(row, next.timelineCols, cells);
+      if (!locksPreserved(row, getRowById(state.model, row.id))) {
+        setMessage('error', 'Kartička je zamčená', 'Před přesunem kartičku odemkni.');
+        return false;
+      }
       state.model = next;
       state.lastMovedCardId = cardId;
       state.selectedCardId = null;
@@ -652,6 +690,21 @@
       return getConflicts(model).groups.reduce((sum, group) => sum + (group.length - 1), 0);
     }
 
+    function hasScheduleGaps(row) {
+      const occupied = new Set(row.cards
+        .filter(card => normalizeText(card.name))
+        .flatMap(cardColumns));
+      if (!occupied.size) return false;
+      const last = Math.max(...occupied);
+      // Meetings must fill every slot from the start; only trailing slots may be empty.
+      return last - FIXED_COLS + 1 !== occupied.size;
+    }
+
+    function locksPreserved(row, originalRow) {
+      return originalRow.cards.filter(card => card.locked).every(locked =>
+        row.cards.some(card => card.startCol === locked.startCol && card.span === locked.span && card.name === locked.name && card.locked));
+    }
+
     function buildSuggestion(model, movedCardId) {
       const found = findCardById(model, movedCardId);
       if (!found) return null;
@@ -680,6 +733,7 @@
       } else {
         continue;
       }
+        if (hasScheduleGaps(clonedRow) || !locksPreserved(clonedRow, row)) continue;
         const after = evaluateConflictScore(cloned);
         if (after < before && (!best || after < best.after)) {
           best = {
@@ -699,7 +753,7 @@
           type: 'warning',
           movedCardId: card.id,
           message: `Kolize v čase ${targetCols.map(colLabel).join(', ')}.`,
-          detail: 'V tomhle řádku jsem nenašel jednoduchou výměnu, která by počet kolizí snížila.',
+          detail: 'V tomhle řádku jsem nenašel jednoduchou výměnu, která by snížila počet kolizí a zachovala návaznost učitelů bez mezer.',
         };
       }
 
@@ -734,7 +788,7 @@
             let bestCandidate = null;
             for (const candidate of row.cards) {
               // Swapping positions preserves coverage only for equally long cards.
-              if (candidate.id === card.id || candidate.span !== card.span) continue;
+              if (candidate.id === card.id || candidate.span !== card.span || card.locked || candidate.locked) continue;
               const cloned = deepClone(working);
               const clonedRow = getRowById(cloned, row.id);
               const a = clonedRow.cards.find(x => x.id === card.id);
@@ -742,6 +796,7 @@
               const tmp = a.startCol;
               a.startCol = b.startCol;
               b.startCol = tmp;
+              if (hasScheduleGaps(clonedRow)) continue;
               const score = evaluateConflictScore(cloned);
               if (score < before && (!bestCandidate || score < bestCandidate.score)) {
                 bestCandidate = { score, candidateId: candidate.id };
@@ -765,6 +820,132 @@
       }
 
       return { model: working, changed };
+    }
+
+    function shuffleCards(cards) {
+      const result = cards.slice();
+      for (let i = result.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [result[i], result[j]] = [result[j], result[i]];
+      }
+      return result;
+    }
+
+    // Fill every slot from the first time to the last meeting, keeping locked cards fixed.
+    // With one- and two-slot cards, each free segment needs at most one odd single slot.
+    function packScheduleRow(row, timelineCols, randomize = true) {
+      const first = timelineCols[0];
+      const meetings = row.cards.filter(card => normalizeText(card.name));
+      if (row.cards.some(card => ![1, 2].includes(card.span))) throw new Error('Generátor podporuje kartičky o délce jednoho nebo dvou políček.');
+      const end = first + meetings.reduce((sum, card) => sum + card.span, 0);
+      const occupied = new Set();
+      const result = [];
+      const impossible = () => new Error(`Třída ${row.fixed[0] || row.rowIndex}: se zamčenými pozicemi nelze sestavit rozpis od prvního času bez mezer. Odemkni některé kartičky.`);
+      if (end > first + timelineCols.length) throw impossible();
+      for (const card of row.cards.filter(card => card.locked)) {
+        const named = !!normalizeText(card.name);
+        if (card.startCol < first || card.startCol + card.span > first + timelineCols.length ||
+            (named ? card.startCol + card.span > end : card.startCol < end)) throw impossible();
+        for (const col of cardColumns(card)) {
+          if (occupied.has(col)) throw impossible();
+          occupied.add(col);
+        }
+        result.push({ ...card });
+      }
+      const gaps = [];
+      for (let col = first; col < end;) {
+        if (occupied.has(col)) { col += 1; continue; }
+        const start = col;
+        while (col < end && !occupied.has(col)) col += 1;
+        gaps.push({ start, length: col - start });
+      }
+      const unlocked = meetings.filter(card => !card.locked);
+      const singles = unlocked.filter(card => card.span === 1);
+      const doubles = unlocked.filter(card => card.span === 2);
+      if (singles.length < gaps.reduce((sum, gap) => sum + gap.length % 2, 0) ||
+          doubles.length > gaps.reduce((sum, gap) => sum + Math.floor(gap.length / 2), 0)) throw impossible();
+      const singlePool = randomize ? shuffleCards(singles) : singles.slice();
+      const doublePool = randomize ? shuffleCards(doubles) : doubles.slice();
+      for (const gap of (randomize ? shuffleCards(gaps) : gaps)) {
+        const count = Math.min(doublePool.length, Math.floor(gap.length / 2));
+        let cards = [...doublePool.splice(0, count), ...singlePool.splice(0, gap.length - count * 2)];
+        if (randomize) cards = shuffleCards(cards);
+        let col = gap.start;
+        for (const card of cards) {
+          result.push({ ...card, startCol: col });
+          col += card.span;
+        }
+      }
+      const ids = new Set(result.map(card => card.id));
+      for (let col = end; col < first + timelineCols.length; col += 1) {
+        if (occupied.has(col)) continue;
+        let id = `empty-${row.id}-${col}`;
+        while (ids.has(id)) id += '-';
+        ids.add(id);
+        result.push({ id, rowId: row.id, rowIndex: row.rowIndex, startCol: col, span: 1, name: '', locked: false });
+      }
+      return { ...row, cards: result.sort((a, b) => a.startCol - b.startCol) };
+    }
+
+    async function generateSchedule(model, options = {}) {
+      const iterations = options.iterations ?? 1600;
+      let working = deepClone(model);
+      working.rowData = working.rowData.map(row => packScheduleRow(row, working.timelineCols, false));
+      // Retain an already valid arrangement as the baseline, so generation cannot worsen it.
+      if (!model.rowData.some(hasScheduleGaps)) working = deepClone(model);
+      let score = evaluateConflictScore(working);
+      let best = deepClone(working);
+      let bestScore = score;
+      for (let step = 0; step < iterations && bestScore > 0; step += 1) {
+        if (options.shouldCancel?.()) return null;
+        if (step % 40 === 0) {
+          options.onProgress?.(step, bestScore);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          if (options.shouldCancel?.()) return null;
+        }
+        if (step > 0 && step % 160 === 0) {
+          working = deepClone(best);
+          working.rowData = working.rowData.map(row => packScheduleRow(row, working.timelineCols));
+          score = evaluateConflictScore(working);
+        }
+        const index = Math.floor(Math.random() * working.rowData.length);
+        const previous = working.rowData[index];
+        working.rowData[index] = packScheduleRow(previous, working.timelineCols);
+        const nextScore = evaluateConflictScore(working);
+        if (nextScore <= score) score = nextScore;
+        else working.rowData[index] = previous;
+        if (score < bestScore) {
+          best = deepClone(working);
+          bestScore = score;
+        }
+      }
+      return options.shouldCancel?.() ? null : { model: best, score: bestScore };
+    }
+
+    async function runGenerator() {
+      if (!state.model || generatorDialog.open) return;
+      if (state.editingCardId) commitInlineEdit();
+      cancelGeneration = false;
+      generatorProgress.textContent = 'Hledám rozpis bez mezer…';
+      generatorDialog.showModal();
+      try {
+        const result = await generateSchedule(state.model, {
+          shouldCancel: () => cancelGeneration,
+          onProgress: (step, score) => { generatorProgress.textContent = `Hledání ${Math.round(step / 1600 * 100)} % · Nejnižší počet kolizí: ${score}`; }
+        });
+        if (!result) return;
+        state.model = result.model;
+        state.selectedCardId = null;
+        state.lastMovedCardId = null;
+        state.message = { type: result.score ? 'warn' : 'ok', title: 'Rozpis vygenerován', detail: result.score
+          ? `Učitelé navazují od prvního času bez mezer a zamčené pozice zůstaly zachované. Zbývající počet kolizí: ${result.score}. Hledání nenašlo bezkolizní rozpis; můžeš ho zopakovat nebo změnit zámky.`
+          : 'Rozpis je bez kolizí a bez mezer od prvního času. Učitelé, délky kartiček i zamčené pozice zůstaly zachované.' };
+        render();
+      } catch (err) {
+        setMessage('error', 'Rozpis se nepodařilo vygenerovat', err.message + ' Původní rozpis zůstal zachován.');
+      } finally {
+        generatorDialog.close();
+      }
     }
 
     function modelToRows(model) {
@@ -809,6 +990,7 @@
       const found = findCardById(next, cardId);
       if (!found) return;
       found.card.name = name;
+      if (!normalizeText(name)) found.card.locked = false;
       state.model = next;
       state.lastMovedCardId = cardId;
       state.editingCardId = null;
@@ -920,6 +1102,7 @@
       const preservedScrollLeft = gridWrap ? gridWrap.scrollLeft : 0;
       saveProjectBtn.disabled = !state.model;
       autoFixBtn.disabled = !state.model;
+      generateBtn.disabled = !state.model;
       downloadBtn.disabled = !state.model;
       copyTableBtn.disabled = !state.model;
       gridPanel.style.display = state.model ? '' : 'none';
@@ -994,12 +1177,14 @@
       }
 
       const classes = ['card'];
+      if (card.locked) classes.push('locked');
       if (sameTeacher) classes.push('same-teacher');
       if (isConflict) classes.push('conflict');
       if (isSelected) classes.push('selected');
 
       return `
         <div class="${classes.join(' ')}" data-card-id="${card.id}" data-span="${card.span}" style="${style}">
+          <button class="card-lock" data-lock-id="${card.id}" aria-pressed="${!!card.locked}" title="${card.locked ? 'Odemknout kartičku' : 'Zamknout pozici pro generátor'}" aria-label="${card.locked ? 'Odemknout kartičku' : 'Zamknout pozici pro generátor'}">${card.locked ? '🔒' : '🔓'}</button>
           ${editing
             ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
             : `<div class="card-name" data-edit-text-id="${card.id}">${escapeHtml(name)}</div>`}
@@ -1008,9 +1193,20 @@
 
     function attachEvents() {
 
+      gridEl.querySelectorAll('[data-lock-id]').forEach(button => {
+        button.addEventListener('click', e => {
+          e.stopPropagation();
+          const found = findCardById(state.model, button.dataset.lockId);
+          if (!found) return;
+          found.card.locked = !found.card.locked;
+          render();
+        });
+        button.addEventListener('dblclick', e => e.stopPropagation());
+      });
+
       gridEl.querySelectorAll('[data-card-id]').forEach(cardEl => {
         cardEl.addEventListener('click', e => {
-          if (e.target.closest('.card-name-edit')) return;
+          if (e.target.closest('.card-name-edit, .card-lock')) return;
           e.stopPropagation();
           handleCardClick(cardEl.dataset.cardId);
         });
@@ -1081,8 +1277,12 @@
       state.editingCardId = null;
       state.editingDraft = '';
       state.message = result.changed
-        ? { type: 'ok', title: 'Automatická oprava dokončena', detail: 'Aplikace provedla výměny, které snížily počet kolizí.' }
-        : { type: 'error', title: 'Žádná jednoduchá oprava nenalezena', detail: 'Zkus ruční přesuny nebo úpravu jmen dvojklikem na kartičku.' };
+        ? { type: 'ok', title: 'Automatická oprava dokončena', detail: 'Aplikace provedla výměny, které snížily počet kolizí a zachovaly návaznost učitelů bez mezer v upravených třídách.' }
+        : { type: 'error', title: 'Žádná jednoduchá oprava nenalezena', detail: 'Nenašel jsem výměnu, která by snížila počet kolizí a zachovala návaznost učitelů bez mezer. Zkus ruční přesuny.' };
+      if (state.model.rowData.some(hasScheduleGaps)) {
+        state.message.type = 'warn';
+        state.message.detail += ' V rozpisu zůstává volno před první schůzkou nebo mezi učiteli z původního nebo ručně upraveného rozpisu; automatická oprava je neodstranila. Volno je povolené jen po poslední schůzce.';
+      }
       render();
     }
 
@@ -1130,12 +1330,25 @@
       }).join('\t')).join('\r\n');
     }
 
+    function prepareClipboardRows(rows, mode = 'auto') {
+      const firstUsedRow = rows.findIndex(row => row.some(cell => normalizeText(cell)));
+      if (firstUsedRow < 0) return [];
+      const data = rows.slice(firstUsedRow);
+      const firstValues = data[0].map(normalizeText).filter(Boolean);
+      // A separate title normally occupies one (possibly merged/repeated) cell.
+      // A header has several different labels, including the time columns.
+      const hasTitle = mode === 'title' || (mode === 'auto' && new Set(firstValues).size === 1);
+      return hasTitle ? data : [['Rozpis třídních schůzek'], ...data];
+    }
+
     function openClipboardDialog(mode, text = '') {
       const copying = mode === 'copy';
       clipboardTitle.textContent = copying ? 'Zkopírovat tabulku do Excelu' : 'Vložit tabulku ze schránky';
       clipboardHelp.textContent = copying
         ? 'Stiskni Ctrl+C (na Macu ⌘C), potom v Excelu vyber buňku A1 a vlož tabulku přes Ctrl+V (⌘V).'
-        : 'V Excelu označ celou tabulku včetně názvu v prvním řádku, záhlaví ve druhém a prvních tří sloupců. Zkopíruj ji přes Ctrl+C (⌘C), vlož sem přes Ctrl+V (⌘V) a klikni na Načíst tabulku. Načtení nahradí současný rozpis.';
+        : 'V Excelu označ tabulku včetně záhlaví a prvních tří sloupců. Samostatný název nad záhlavím můžeš zahrnout také. Zkopíruj ji přes Ctrl+C (⌘C), vlož sem přes Ctrl+V (⌘V) a klikni na Načíst tabulku. Pokud je potřeba, upřesni obsah prvního řádku. Načtení nahradí současný rozpis.';
+      clipboardHeaderLabel.hidden = copying;
+      clipboardHeaderMode.value = 'auto';
       clipboardText.value = text;
       clipboardText.readOnly = copying;
       clipboardError.textContent = '';
@@ -1147,11 +1360,11 @@
 
     function loadClipboardTable() {
       try {
-        const rows = parseClipboardTable(clipboardText.value);
+        const rows = prepareClipboardRows(parseClipboardTable(clipboardText.value), clipboardHeaderMode.value);
         const model = parseRowsToModel(rows);
         if (!model.timelineCols.length || !model.rowData.length ||
             !model.timelineCols.some(col => normalizeText(model.headerRow[col]))) {
-          throw new Error('Vlož celou tabulku: název v prvním řádku, záhlaví s časy ve druhém a data od třetího řádku. První tři sloupce musí zůstat součástí tabulky.');
+          throw new Error('Vlož tabulku se záhlavím s časy a datovými řádky. První tři sloupce musí zůstat součástí tabulky. Zkontroluj také volbu obsahu prvního řádku.');
         }
         state.model = model;
         state.fileName = 'Tabulka ze schránky';
@@ -1285,6 +1498,9 @@
     closeClipboardBtn.addEventListener('click', () => clipboardDialog.close());
     clipboardDialog.addEventListener('close', () => { clipboardText.value = ''; });
     autoFixBtn.addEventListener('click', runAutoFix);
+    generateBtn.addEventListener('click', runGenerator);
+    cancelGeneratorBtn.addEventListener('click', () => { cancelGeneration = true; });
+    generatorDialog.addEventListener('cancel', e => { e.preventDefault(); cancelGeneration = true; });
     downloadBtn.addEventListener('click', downloadWorkbook);
     resetBtn.addEventListener('click', resetApp);
 
