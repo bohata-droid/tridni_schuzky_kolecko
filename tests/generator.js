@@ -50,6 +50,31 @@
     return combine(0, new Set());
   };
   try {
+    state.model = makeModel([[['A', 3, true], ['B', 2]], [['Z']]], 5);
+    state.model.rowData[1].cards[0].id = state.model.rowData[0].cards[0].id + '-part-1';
+    state.selectedCardId = state.model.rowData[0].cards[1].id;
+    const splitValues = JSON.stringify(modelToRows(state.model));
+    render();
+    check(gridEl.querySelectorAll('[data-split-id]').length === 2, 'Show scissors on every multi-slot card');
+    gridEl.querySelector('[data-split-id]').click();
+    check(JSON.stringify(state.model.rowData[0].cards.map(c => c.span)) === '[1,1,1,2]' &&
+      state.model.rowData[0].cards.slice(0, 3).every(c => c.locked) && state.selectedCardId === null,
+      'Scissors split the whole block into individual slots and retain locks');
+    const splitIds = state.model.rowData.flatMap(row => row.cards.map(c => c.id));
+    check(new Set(splitIds).size === splitIds.length && JSON.stringify(modelToRows(state.model)) === splitValues,
+      'Splitting preserves cell values and creates unique IDs');
+    check(gridEl.querySelectorAll('[data-merge-left]').length === 2, 'Show plus only between adjacent equal names');
+    gridEl.querySelectorAll('[data-merge-left]')[1].click();
+    check(JSON.stringify(state.model.rowData[0].cards.map(c => c.span)) === '[1,2,2]', 'Plus joins the chosen neighboring pair');
+    gridEl.querySelector('[data-merge-left]').click();
+    check(JSON.stringify(state.model.rowData[0].cards.map(c => c.span)) === '[3,2]' && state.model.rowData[0].cards[0].locked &&
+      JSON.stringify(modelToRows(state.model)) === splitValues, 'Repeated joining restores the full block and preserves locks and cell values');
+    check(gridEl.querySelectorAll('[data-merge-left]').length === 0 &&
+      !mergeCards(state.model.rowData[0].cards[0].id, state.model.rowData[0].cards[1].id), 'Reject merging different teachers');
+    splitCard(state.model.rowData[0].cards[0].id);
+    const savedSplit = JSON.parse(JSON.stringify(state.model));
+    verify(savedSplit, await generateSchedule(savedSplit));
+    check(true, 'Generator respects blocks created with split controls');
     const imported = parseRowsToModel([
       ['Import'], ['Class', 'Room', 'Teacher', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
       ['1', 'x', 'y', 'A', 'A', 'A', 'B', 'B', 'B', 'B', '', '', ''],

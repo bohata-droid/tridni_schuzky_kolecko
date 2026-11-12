@@ -54,6 +54,11 @@
     .card .card-name, .card .card-name-edit { margin-right: 22px; }
     .card.locked { border: 2px solid #475569; }
     .card-lock { position: absolute; right: 2px; top: 3px; padding: 2px; border: 0; background: transparent; font-size: 14px; line-height: 20px; }
+    .card.has-split .card-name, .card.has-split .card-name-edit { margin-right: 46px; }
+    .card-split { position: absolute; right: 26px; top: 3px; padding: 2px; width: 22px; border: 0; background: transparent; font-size: 16px; line-height: 20px; }
+    .card-merge { position: absolute; top: 9px; z-index: 5; width: 20px; height: 20px; padding: 0; border-radius: 50%; border-color: #94a3b8; background: #fff; font-size: 17px; line-height: 18px; }
+    .card-split:hover, .card-merge:hover { background: #dbeafe; }
+    .card-split:focus-visible, .card-merge:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
     dialog { width: min(850px, 92vw); border: 1px solid var(--line); border-radius: 20px; padding: 24px; }
     dialog::backdrop { background: rgba(15, 23, 42, .4); }
     dialog h2 { margin-top: 0; }
@@ -540,6 +545,47 @@
         card.locked = lockedCards.some(locked => locked.startCol === card.startCol && locked.span === card.span && locked.name === card.name);
       }
       return row;
+    }
+
+    function splitCard(cardId) {
+      if (state.editingCardId) commitInlineEdit();
+      const found = state.model && findCardById(state.model, cardId);
+      if (!found || found.card.span <= 1) return false;
+      const { row, card } = found;
+      const ids = new Set(state.model.rowData.flatMap(r => r.cards.map(c => c.id)));
+      const pieces = Array.from({ length: card.span }, (_, i) => {
+        let id = i === 0 ? card.id : `${card.id}-part-${i}`;
+        while (i > 0 && ids.has(id)) id += '-';
+        ids.add(id);
+        return { ...card, id, startCol: card.startCol + i, span: 1 };
+      });
+      row.cards.splice(row.cards.indexOf(card), 1, ...pieces);
+      state.selectedCardId = null;
+      state.lastMovedCardId = null;
+      state.message = { type: 'ok', title: 'Kartička rozdělena', detail: `Vzniklo ${pieces.length} samostatných kartiček po jednom políčku.` };
+      render();
+      return true;
+    }
+
+    function canMergeCards(left, right) {
+      return left && right && left.rowId === right.rowId &&
+        left.startCol + left.span === right.startCol && normalizeText(left.name) &&
+        normalizeText(left.name) === normalizeText(right.name);
+    }
+
+    function mergeCards(leftId, rightId) {
+      if (state.editingCardId) commitInlineEdit();
+      const left = state.model && findCardById(state.model, leftId);
+      const right = state.model && findCardById(state.model, rightId);
+      if (!left || !right || left.row !== right.row || !canMergeCards(left.card, right.card)) return false;
+      left.card.span += right.card.span;
+      left.card.locked = !!(left.card.locked || right.card.locked);
+      left.row.cards.splice(left.row.cards.indexOf(right.card), 1);
+      state.selectedCardId = null;
+      state.lastMovedCardId = null;
+      state.message = { type: 'ok', title: 'Kartičky spojeny', detail: `Spojená kartička má délku ${left.card.span} políček.` };
+      render();
+      return true;
     }
 
     function getContiguousSinglePair(row, clickedCard) {
@@ -1335,6 +1381,7 @@
         parts.push(`<div class="row-track" style="grid-column: 4 / span ${model.timelineCols.length}; width:${model.timelineCols.length * CELL_W}px;">
           <div class="slot-row">${renderSlots(row)}</div>
           ${row.cards.map(card => renderCard(card, conflictState.cardIds)).join('')}
+          ${renderMergeButtons(row)}
         </div>`);
       });
 
@@ -1355,6 +1402,15 @@
       }).join('');
     }
 
+    function renderMergeButtons(row) {
+      const cards = row.cards.slice().sort((a, b) => a.startCol - b.startCol);
+      return cards.slice(1).map((right, i) => {
+        const left = cards[i];
+        if (!canMergeCards(left, right)) return '';
+        return `<button class="card-merge" data-merge-left="${escapeHtml(left.id)}" data-merge-right="${escapeHtml(right.id)}" style="left:${(right.startCol - FIXED_COLS) * CELL_W - 10}px" title="Spojit sousední kartičky" aria-label="Spojit sousední kartičky: ${escapeHtml(normalizeText(left.name))}">+</button>`;
+      }).join('');
+    }
+
     function renderCard(card, conflictCardIds) {
       const left = (card.startCol - FIXED_COLS) * CELL_W + 4;
       const width = card.span * CELL_W - 8;
@@ -1366,9 +1422,12 @@
       const style = `left:${left}px;width:${width}px;`;
 
       const editing = state.editingCardId === card.id;
+      const splitButton = card.span > 1
+        ? `<button class="card-split" data-split-id="${escapeHtml(card.id)}" title="Rozdělit na jednotlivá políčka" aria-label="Rozdělit kartičku na jednotlivá políčka">✂</button>` : '';
       if (!name) {
         return `
           <div class="card card-empty ${editing ? 'editing' : ''} ${isConflict ? 'conflict' : ''} ${isSelected ? 'selected' : ''}" data-card-id="${card.id}" data-span="${card.span}" style="${style}">
+            ${splitButton}
             ${editing
               ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
               : `<div class="plus" data-edit-empty-id="${card.id}">+</div>`}
@@ -1376,6 +1435,7 @@
       }
 
       const classes = ['card'];
+      if (card.span > 1) classes.push('has-split');
       if (card.locked) classes.push('locked');
       if (sameTeacher) classes.push('same-teacher');
       if (isConflict) classes.push('conflict');
@@ -1384,6 +1444,7 @@
       return `
         <div class="${classes.join(' ')}" data-card-id="${card.id}" data-span="${card.span}" style="${style}">
           <button class="card-lock" data-lock-id="${card.id}" aria-pressed="${!!card.locked}" title="${card.locked ? 'Odemknout kartičku' : 'Zamknout pozici pro generátor'}" aria-label="${card.locked ? 'Odemknout kartičku' : 'Zamknout pozici pro generátor'}">${card.locked ? '🔒' : '🔓'}</button>
+          ${splitButton}
           ${editing
             ? `<div class="card-name-edit" data-edit-card-id="${card.id}" data-placeholder="+" contenteditable="true">${escapeHtml(state.editingDraft)}</div>`
             : `<div class="card-name" data-edit-text-id="${card.id}">${escapeHtml(name)}</div>`}
@@ -1391,6 +1452,17 @@
     }
 
     function attachEvents() {
+
+      gridEl.querySelectorAll('[data-split-id], [data-merge-left]').forEach(button => {
+        // Keep inline editing from removing the clicked button before its click fires.
+        button.addEventListener('mousedown', e => e.preventDefault());
+        button.addEventListener('click', e => {
+          e.stopPropagation();
+          if (button.dataset.splitId) splitCard(button.dataset.splitId);
+          else mergeCards(button.dataset.mergeLeft, button.dataset.mergeRight);
+        });
+        button.addEventListener('dblclick', e => e.stopPropagation());
+      });
 
       gridEl.querySelectorAll('[data-lock-id]').forEach(button => {
         button.addEventListener('click', e => {
@@ -1405,7 +1477,7 @@
 
       gridEl.querySelectorAll('[data-card-id]').forEach(cardEl => {
         cardEl.addEventListener('click', e => {
-          if (e.target.closest('.card-name-edit, .card-lock')) return;
+          if (e.target.closest('.card-name-edit, .card-lock, .card-split')) return;
           e.stopPropagation();
           const selected = state.selectedCardId && findCardById(state.model, state.selectedCardId);
           const target = findCardById(state.model, cardEl.dataset.cardId);
