@@ -443,10 +443,10 @@
         while (offset < timelineCols.length) {
           const globalCol = FIXED_COLS + offset;
           const current = String(row[globalCol] ?? '');
-          const next = String(row[globalCol + 1] ?? '');
           const currentN = normalizeText(current);
-          const nextN = normalizeText(next);
-          const span = currentN && currentN === nextN ? 2 : 1;
+          let span = 1;
+          while (currentN && offset + span < timelineCols.length &&
+              normalizeText(row[globalCol + span]) === currentN) span += 1;
 
           cards.push({
             id: `r${r}-c${globalCol}`,
@@ -522,9 +522,9 @@
       while (i < timelineCols.length) {
         const col = timelineCols[i];
         const current = String(cellValues[col] ?? '');
-        const nextCol = timelineCols[i + 1];
-        const next = nextCol != null ? String(cellValues[nextCol] ?? '') : '';
-        const span = normalizeText(current) && current === next ? 2 : 1;
+        let span = 1;
+        while (normalizeText(current) && i + span < timelineCols.length &&
+            current === String(cellValues[timelineCols[i + span]] ?? '')) span += 1;
         cards.push({
           id: `r${row.rowIndex}-c${col}`,
           rowId: row.id,
@@ -606,7 +606,7 @@
 
       if (a.card.span === b.card.span) {
         ok = swapEqualCards(row, a.card, b.card);
-      } else if (a.card.span === 1 && b.card.span === 2) {
+      } else if (a.card.span === 1 && b.card.span > 1) {
         ok = moveSpan1IntoSpan2(row, a.card, b.card);
         detail = 'Pětiminutovou kartičku jsem vložil na zvolené místo a původní karta z cíle se přesunula zpět.';
       } else if (a.card.span === 2 && b.card.span === 1) {
@@ -866,11 +866,10 @@
     }
 
     // Fill every slot from the first time to the last meeting, keeping locked cards fixed.
-    // With one- and two-slot cards, each free segment needs at most one odd single slot.
     function packScheduleRow(row, timelineCols, randomize = true) {
       const first = timelineCols[0];
       const meetings = row.cards.filter(card => normalizeText(card.name));
-      if (row.cards.some(card => ![1, 2].includes(card.span))) throw new Error('Generátor podporuje kartičky o délce jednoho nebo dvou políček.');
+      if (row.cards.some(card => !Number.isInteger(card.span) || card.span < 1)) throw new Error('Délka kartičky musí být kladný celý počet políček.');
       const end = first + meetings.reduce((sum, card) => sum + card.span, 0);
       const occupied = new Set();
       const result = [];
@@ -894,22 +893,32 @@
         gaps.push({ start, length: col - start });
       }
       const unlocked = meetings.filter(card => !card.locked);
-      const singles = unlocked.filter(card => card.span === 1);
-      const doubles = unlocked.filter(card => card.span === 2);
-      if (singles.length < gaps.reduce((sum, gap) => sum + gap.length % 2, 0) ||
-          doubles.length > gaps.reduce((sum, gap) => sum + Math.floor(gap.length / 2), 0)) throw impossible();
-      const singlePool = randomize ? shuffleCards(singles) : singles.slice();
-      const doublePool = randomize ? shuffleCards(doubles) : doubles.slice();
-      for (const gap of (randomize ? shuffleCards(gaps) : gaps)) {
-        const count = Math.min(doublePool.length, Math.floor(gap.length / 2));
-        let cards = [...doublePool.splice(0, count), ...singlePool.splice(0, gap.length - count * 2)];
-        if (randomize) cards = shuffleCards(cards);
-        let col = gap.start;
-        for (const card of cards) {
-          result.push({ ...card, startCol: col });
-          col += card.span;
-        }
+      const pools = new Map();
+      for (const card of (randomize ? shuffleCards(unlocked) : unlocked)) {
+        if (!pools.has(card.span)) pools.set(card.span, []);
+        pools.get(card.span).push(card);
       }
+      const lengths = [...pools.keys()].sort((a, b) => b - a);
+      const failed = new Set();
+      const fill = (gapIndex, used) => {
+        if (gapIndex === gaps.length) return [...pools.values()].every(pool => !pool.length);
+        const gap = gaps[gapIndex];
+        if (used === gap.length) return fill(gapIndex + 1, 0);
+        const key = `${gapIndex}:${used}:${lengths.map(length => pools.get(length).length).join(',')}`;
+        if (failed.has(key)) return false;
+        for (const length of lengths) {
+          const pool = pools.get(length);
+          if (!pool.length || used + length > gap.length) continue;
+          const card = pool.pop();
+          result.push({ ...card, startCol: gap.start + used });
+          if (fill(gapIndex, used + length)) return true;
+          result.pop();
+          pool.push(card);
+        }
+        failed.add(key);
+        return false;
+      };
+      if (!fill(0, 0)) throw impossible();
       const ids = new Set(result.map(card => card.id));
       for (let col = end; col < first + timelineCols.length; col += 1) {
         if (occupied.has(col)) continue;
@@ -1004,7 +1013,7 @@
         let choices = null;
         const available = teachers.size ? teacherUsed.map(() => 0n) : [];
         const demand = teacherUsed.map(() => 0);
-        const singles = rowUsed.map(() => 0);
+        const oddCards = rowUsed.map(() => 0);
         for (const task of remaining) {
           if (task.start >= 0) continue;
           let blocked = rowUsed[task.rowIndex];
@@ -1015,7 +1024,7 @@
           let union = 0n;
           placements.forEach(p => { union |= p.mask; });
           task.resources.forEach(t => { available[t] |= union; demand[t] += task.card.span; });
-          if (task.card.span === 1) singles[task.rowIndex] += 1;
+          if (task.card.span % 2) oddCards[task.rowIndex] += 1;
           if (task.previous && task.previous.start < 0) continue;
           if (!choices || placements.length < choices.length ||
               (placements.length === choices.length && task.resources.length > chosen.resources.length)) {
@@ -1032,7 +1041,7 @@
             if (col < rowLengths[row] && (rowUsed[row] & (1n << BigInt(col))) === 0n) gap += 1;
             else { oddGaps += gap % 2; gap = 0; }
           }
-          if (oddGaps > singles[row]) return false;
+          if (oddGaps > oddCards[row]) return false;
         }
         // Try the original position first to avoid unnecessary changes.
         const original = chosen.card.startCol - first;
@@ -1092,7 +1101,14 @@
       if (status === 'infeasible') return { status, reason: 'Pro tyto učitele, délky schůzek a zámky neexistuje rozpis bez kolizí a bez mezer od prvního času. Změň zámky nebo podmínky rozpisu.', nodes };
       tasks.forEach(task => { task.card.startCol = first + task.start; });
       working.rowData.forEach(row => row.cards.sort((a, b) => a.startCol - b.startCol));
-      if (evaluateConflictScore(working) || working.rowData.some(hasScheduleGaps)) {
+      const blocksPreserved = working.rowData.every((row, i) => {
+        const original = model.rowData[i];
+        const before = original.cards.filter(card => normalizeText(card.name));
+        const after = row.cards.filter(card => normalizeText(card.name));
+        return before.length === after.length && before.every(card => after.some(candidate =>
+          candidate.id === card.id && candidate.name === card.name && candidate.span === card.span)) && locksPreserved(row, original);
+      });
+      if (!blocksPreserved || evaluateConflictScore(working) || working.rowData.some(hasScheduleGaps)) {
         throw new Error('Kontrola výsledného rozpisu selhala.');
       }
       return { status: 'solved', model: working, score: 0, nodes };
@@ -1234,7 +1250,7 @@
         setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
         return;
       }
-      if (selected.card.span === 2) moveSelectedToColumn(state.selectedCardId, col);
+      if (selected.card.span > 1) moveSelectedToColumn(state.selectedCardId, col);
       else moveSelectedToEmptySlot(state.selectedCardId, col);
     }
 
@@ -1393,7 +1409,7 @@
           e.stopPropagation();
           const selected = state.selectedCardId && findCardById(state.model, state.selectedCardId);
           const target = findCardById(state.model, cardEl.dataset.cardId);
-          if (selected?.card.span === 2 && selected.row.id === target?.row.id) {
+          if (selected?.card.span > 1 && selected.row.id === target?.row.id) {
             const track = cardEl.closest('.row-track');
             const col = FIXED_COLS + Math.floor((e.clientX - track.getBoundingClientRect().left) / CELL_W);
             moveSelectedToColumn(selected.card.id, col);

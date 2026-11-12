@@ -50,6 +50,32 @@
     return combine(0, new Set());
   };
   try {
+    const imported = parseRowsToModel([
+      ['Import'], ['Class', 'Room', 'Teacher', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+      ['1', 'x', 'y', 'A', 'A', 'A', 'B', 'B', 'B', 'B', '', '', ''],
+      ['2', 'x', 'y', 'A', 'A', 'A', 'C', 'C', 'C', 'C', '', '', '']
+    ]);
+    check(JSON.stringify(imported.rowData[0].cards.filter(c => c.name).map(c => c.span)) === '[3,4]', 'Import recognizes complete three- and four-slot blocks');
+    const importedResult = await generateSchedule(imported);
+    verify(imported, importedResult);
+    const reimported = parseRowsToModel(modelToRows(importedResult.model));
+    check(reimported.rowData.every(row => JSON.stringify(row.cards.filter(c => c.name).map(c => c.span).sort()) === '[3,4]'), 'Generation and export preserve whole imported blocks');
+    const triple = makeModel([[['A', 3], ['B', 3]], [['A', 3], ['C', 3]]]);
+    verify(triple, await generateSchedule(triple));
+    check(true, 'Solve odd three-slot blocks without single-slot cards');
+    const lockedLong = makeModel([[['X', 3], ['A', 2, true], ['Y', 3]], [['X', 3], ['Z', 2], ['W', 3]]], 8);
+    verify(lockedLong, await generateSchedule(lockedLong));
+    check(true, 'Pack long blocks around locked positions without splitting');
+    const manuallySplit = makeModel([[['A', 2], ['A', 1], ['B', 3]], [['A', 2], ['C', 4]]]);
+    verify(manuallySplit, await generateSchedule(manuallySplit));
+    check(true, 'Generator preserves separately entered blocks with the same teacher');
+    state.model = makeModel([[['A', 3], ['B']]], 4);
+    state.selectedCardId = null;
+    check(placeSelectedAtTarget(state.model.rowData[0].cards[1].id, state.model.rowData[0].cards[0].id) &&
+      JSON.stringify(state.model.rowData[0].cards.map(c => [c.name, c.span])) === JSON.stringify([['B', 1], ['A', 3]]), 'Manual insertion into a long block remains available');
+    state.model = makeModel([[['A', 3], ['B', 2]]], 5);
+    check(moveSelectedToColumn(state.model.rowData[0].cards[1].id, 4) &&
+      JSON.stringify(state.model.rowData[0].cards.map(c => [c.name, c.span])) === JSON.stringify([['A', 1], ['B', 2], ['A', 2]]), 'Manual movement can still split a three-slot block');
     const input = makeModel([
       [['A', 2, true], ['B'], ['C'], ['D'], ['E']],
       [['A', 2], ['C'], ['B'], ['E'], ['D']],
@@ -73,8 +99,8 @@
     const random = n => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed % n; };
     for (let sample = 0; sample < 80; sample++) {
       const rows = Array.from({ length: 2 + random(2) }, () => Array.from({ length: 2 + random(2) }, () =>
-        [String.fromCharCode(65 + random(5)) + (random(8) === 0 ? ', F' : ''), 1 + random(2), random(10) === 0]));
-      const model = makeModel(rows);
+        [String.fromCharCode(65 + random(5)) + (random(8) === 0 ? ', F' : ''), 1 + random(3), random(10) === 0]));
+      const model = makeModel(rows, 9);
       const expected = oracle(model);
       const result = await generateSchedule(model);
       if (expected !== (result.status === 'solved')) throw Error(`Oracle mismatch ${sample}: ${JSON.stringify(model)} ${JSON.stringify(result)}`);
@@ -102,6 +128,15 @@
     const mixedResult = await generateSchedule(mixedLarge, { timeLimitMs: 20000 });
     verify(mixedLarge, mixedResult);
     check(true, `17 classes / 10 slots mixed durations solved: ${mixedResult.nodes} nodes, ${Math.round(performance.now() - mixedBegan)} ms`);
+    const longRows = Array.from({ length: 17 }, (_, r) => {
+      let col = 0;
+      const cards = [3, 2, 1, 4].map(span => { const card = [`T${(r + col) % 17}`, span]; col += span; return card; });
+      for (let i = cards.length - 1; i > 0; i--) { const j = random(i + 1); [cards[i], cards[j]] = [cards[j], cards[i]]; }
+      return cards;
+    });
+    const longLarge = makeModel(longRows, 10);
+    verify(longLarge, await generateSchedule(longLarge, { timeLimitMs: 20000 }));
+    check(true, '17 classes / 10 slots preserve three- and four-slot blocks');
     const longModel = makeModel([[...Array.from({ length: 20 }, (_, i) => [`L${i}`, 2])]], 40);
     longModel.rowData[0].cards.forEach(card => { card.startCol = 3 + (card.startCol - 3 + 2) % 40; });
     verify(longModel, await generateSchedule(longModel));
