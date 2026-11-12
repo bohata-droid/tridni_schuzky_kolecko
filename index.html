@@ -263,7 +263,7 @@
         <button id="resetBtn">Reset</button>
         <div id="fileName" class="filename"></div>
       </div>
-      <p class="filename">Zámkem na kartičce upevníš její pozici. Generátor zachová učitele i délky kartiček a hledá rozpis od prvního času bez mezer s co nejméně kolizemi. Zámky se ukládají do souboru rozdělané práce.</p>
+      <p class="filename">Zámkem na kartičce upevníš její pozici. Generátor zachová učitele i délky kartiček a hledá rozpis od prvního času bez mezer a bez kolizí. Náročné hledání může trvat déle; lze ho zrušit a ponechat původní rozpis. Zámky se ukládají do souboru rozdělané práce.</p>
 
     </div>
 
@@ -632,6 +632,40 @@
       return true;
     }
 
+    // Insert the selected range at the exact clicked column, shifting intervening cells.
+    // Unlike swapping two ranges, this also supports overlapping one-slot moves.
+    function moveSelectedToColumn(cardId, targetCol) {
+      const next = deepClone(state.model);
+      const found = findCardById(next, cardId);
+      if (!found) return false;
+      const { row, card } = found;
+      const cols = next.timelineCols;
+      if (!cols.includes(targetCol) || targetCol + card.span - 1 > cols[cols.length - 1]) {
+        setMessage('error', 'Sem kartičku nelze přesunout', 'Celá kartička se musí vejít do rozpisu.');
+        return false;
+      }
+      if (targetCol === card.startCol) {
+        state.selectedCardId = null;
+        render();
+        return true;
+      }
+      const values = rowToCellValues(row, cols);
+      const cells = cols.map(col => values[col]);
+      const moving = cells.splice(card.startCol - cols[0], card.span);
+      cells.splice(targetCol - cols[0], 0, ...moving);
+      rebuildRowCards(row, cols, Object.fromEntries(cols.map((col, i) => [col, cells[i]])));
+      if (!locksPreserved(row, getRowById(state.model, row.id))) {
+        setMessage('error', 'Kartička je zamčená', 'Před přesunem odemkni kartičky, kterých se přesun dotýká.');
+        return false;
+      }
+      state.model = next;
+      state.lastMovedCardId = row.cards.find(c => cardColumns(c).includes(targetCol))?.id || null;
+      state.selectedCardId = null;
+      state.message = { type: 'ok', title: 'Kartička umístěna', detail: `Kartička začíná na pozici ${colLabel(targetCol)}.` };
+      render();
+      return true;
+    }
+
     function moveSelectedToEmptySlot(cardId, targetCol) {
       const next = deepClone(state.model);
       const found = findCardById(next, cardId);
@@ -887,39 +921,181 @@
       return { ...row, cards: result.sort((a, b) => a.startCol - b.startCol) };
     }
 
+    // Complete constraint search: every meeting keeps its duration and row,
+    // each teacher occupies at most one class per slot, and rows have no gaps.
     async function generateSchedule(model, options = {}) {
-      const iterations = options.iterations ?? 1600;
-      let working = deepClone(model);
+      if (options.shouldCancel?.()) return null;
+      const started = performance.now();
+      const deadline = started + (options.timeLimitMs ?? Infinity);
+      const working = deepClone(model);
+      const first = working.timelineCols[0];
+      if (first == null || !working.rowData.length) throw new Error('Rozpis neobsahuje třídy nebo časová pole.');
       working.rowData = working.rowData.map(row => packScheduleRow(row, working.timelineCols, false));
-      // Retain an already valid arrangement as the baseline, so generation cannot worsen it.
-      if (!model.rowData.some(hasScheduleGaps)) working = deepClone(model);
-      let score = evaluateConflictScore(working);
-      let best = deepClone(working);
-      let bestScore = score;
-      for (let step = 0; step < iterations && bestScore > 0; step += 1) {
-        if (options.shouldCancel?.()) return null;
-        if (step % 40 === 0) {
-          options.onProgress?.(step, bestScore);
-          await new Promise(resolve => setTimeout(resolve, 0));
-          if (options.shouldCancel?.()) return null;
-        }
-        if (step > 0 && step % 160 === 0) {
-          working = deepClone(best);
-          working.rowData = working.rowData.map(row => packScheduleRow(row, working.timelineCols));
-          score = evaluateConflictScore(working);
-        }
-        const index = Math.floor(Math.random() * working.rowData.length);
-        const previous = working.rowData[index];
-        working.rowData[index] = packScheduleRow(previous, working.timelineCols);
-        const nextScore = evaluateConflictScore(working);
-        if (nextScore <= score) score = nextScore;
-        else working.rowData[index] = previous;
-        if (score < bestScore) {
-          best = deepClone(working);
-          bestScore = score;
+      if (!model.rowData.some(hasScheduleGaps) && evaluateConflictScore(model) === 0) {
+        return { status: 'solved', model: deepClone(model), score: 0, nodes: 0 };
+      }
+
+      const teachers = new Map();
+      const tasks = [];
+      const rowUsed = working.rowData.map(() => 0n);
+      const rowLengths = working.rowData.map(row => row.cards.reduce((n, card) => n + (normalizeText(card.name) ? card.span : 0), 0));
+      const teacherUsed = [];
+      const teacherTasks = [];
+      const groups = new Map();
+      const maskFor = (start, span) => ((1n << BigInt(span)) - 1n) << BigInt(start);
+      const failure = reason => ({ status: 'infeasible', reason, nodes: 0 });
+      for (const [rowIndex, row] of working.rowData.entries()) {
+        for (const card of row.cards.filter(card => normalizeText(card.name))) {
+          const names = [...new Set(splitTeachers(card.name).map(normalizeTeacherKey))];
+          const resources = names.map(name => {
+            if (!teachers.has(name)) {
+              teachers.set(name, teachers.size);
+              teacherUsed.push(0n);
+              teacherTasks.push([]);
+            }
+            return teachers.get(name);
+          });
+          const task = { card, rowIndex, resources, start: -1, placements: [], previous: null };
+          tasks.push(task);
+          resources.forEach(t => teacherTasks[t].push(task));
+          for (let start = 0; start + card.span <= rowLengths[rowIndex]; start += 1) {
+            task.placements.push({ start, mask: maskFor(start, card.span) });
+          }
+          if (card.locked) {
+            task.start = card.startCol - first;
+            const mask = maskFor(task.start, card.span);
+            if (resources.some(t => (teacherUsed[t] & mask) !== 0n)) {
+              return failure('Zamčené schůzky stejného učitele se časově překrývají. Odemkni některou z nich.');
+            }
+            rowUsed[rowIndex] |= mask;
+            resources.forEach(t => { teacherUsed[t] |= mask; });
+          } else {
+            // Interchangeable meetings need only one ordering in each row.
+            const key = JSON.stringify([rowIndex, card.span, resources.slice().sort((a, b) => a - b)]);
+            task.previous = groups.get(key) || null;
+            groups.set(key, task);
+          }
         }
       }
-      return options.shouldCancel?.() ? null : { model: best, score: bestScore };
+
+      for (const [name, teacher] of teachers) {
+        let demand = 0;
+        for (const task of teacherTasks[teacher].slice().sort((a, b) => rowLengths[a.rowIndex] - rowLengths[b.rowIndex])) {
+          demand += task.card.span;
+          if (demand > rowLengths[task.rowIndex]) {
+            return failure(`Učitel „${name}“ potřebuje ${demand} polí, ale tyto třídy mají schůzky jen v prvních ${rowLengths[task.rowIndex]} polích. Bez mezer a se zachováním délek nelze kolize odstranit.`);
+          }
+        }
+      }
+
+      let nodes = 0;
+      let sliceStarted = performance.now();
+      const remaining = tasks.filter(task => !task.card.locked);
+      const bitCount = value => {
+        let count = 0;
+        while (value) { value &= value - 1n; count += 1; }
+        return count;
+      };
+      function* search(left) {
+        nodes += 1;
+        if (nodes % 128 === 0 || performance.now() - sliceStarted >= 12) yield;
+        if (!left) return true;
+        let chosen = null;
+        let choices = null;
+        const available = teachers.size ? teacherUsed.map(() => 0n) : [];
+        const demand = teacherUsed.map(() => 0);
+        const singles = rowUsed.map(() => 0);
+        for (const task of remaining) {
+          if (task.start >= 0) continue;
+          let blocked = rowUsed[task.rowIndex];
+          for (const t of task.resources) blocked |= teacherUsed[t];
+          const placements = task.placements.filter(p => (p.mask & blocked) === 0n &&
+            (!task.previous || task.previous.start < 0 || p.start > task.previous.start));
+          if (!placements.length) return false;
+          let union = 0n;
+          placements.forEach(p => { union |= p.mask; });
+          task.resources.forEach(t => { available[t] |= union; demand[t] += task.card.span; });
+          if (task.card.span === 1) singles[task.rowIndex] += 1;
+          if (task.previous && task.previous.start < 0) continue;
+          if (!choices || placements.length < choices.length ||
+              (placements.length === choices.length && task.resources.length > chosen.resources.length)) {
+            chosen = task;
+            choices = placements;
+          }
+        }
+        // Forward checking: resource capacity and fillable row segments.
+        if (available.some((mask, t) => demand[t] > bitCount(mask))) return false;
+        for (let row = 0; row < rowUsed.length; row += 1) {
+          let gap = 0;
+          let oddGaps = 0;
+          for (let col = 0; col <= rowLengths[row]; col += 1) {
+            if (col < rowLengths[row] && (rowUsed[row] & (1n << BigInt(col))) === 0n) gap += 1;
+            else { oddGaps += gap % 2; gap = 0; }
+          }
+          if (oddGaps > singles[row]) return false;
+        }
+        // Try the original position first to avoid unnecessary changes.
+        const original = chosen.card.startCol - first;
+        choices.sort((a, b) => (a.start === original ? -1 : b.start === original ? 1 : a.start - b.start));
+        for (const placement of choices) {
+          chosen.start = placement.start;
+          rowUsed[chosen.rowIndex] |= placement.mask;
+          chosen.resources.forEach(t => { teacherUsed[t] |= placement.mask; });
+          if (yield* search(left - 1)) return true;
+          rowUsed[chosen.rowIndex] ^= placement.mask;
+          chosen.resources.forEach(t => { teacherUsed[t] ^= placement.mask; });
+          chosen.start = -1;
+        }
+        return false;
+      }
+
+      const runSearch = async phaseLimit => {
+        const searcher = search(remaining.length);
+        let step;
+        do {
+          if (options.shouldCancel?.()) return 'cancelled';
+          if (performance.now() >= deadline || nodes >= (options.nodeLimit ?? Infinity)) return 'incomplete';
+          if (nodes >= phaseLimit) return 'phase-limit';
+          sliceStarted = performance.now();
+          step = searcher.next();
+          if (!step.done) {
+            options.onProgress?.({ nodes, elapsedMs: performance.now() - started });
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        } while (!step.done);
+        return options.shouldCancel?.() ? 'cancelled' : step.value ? 'solved' : 'infeasible';
+      };
+
+      let status;
+      // Try shared boundaries first when every class has the same mix of lengths.
+      // This removes many equivalent arrangements in large, unlocked schedules.
+      // Failure here is not a proof: the unrestricted search always follows.
+      const template = working.rowData[0].cards.filter(card => normalizeText(card.name));
+      const lengthSignature = row => row.cards.filter(card => normalizeText(card.name)).map(card => card.span).sort().join(',');
+      if (!tasks.some(task => task.card.locked) && working.rowData.every(row => lengthSignature(row) === lengthSignature(working.rowData[0]))) {
+        const originalPlacements = remaining.map(task => task.placements);
+        remaining.forEach(task => {
+          const starts = new Set(template.filter(card => card.span === task.card.span).map(card => card.startCol - first));
+          task.placements = task.placements.filter(p => starts.has(p.start));
+        });
+        status = await runSearch(20000);
+        if (status === 'infeasible' || status === 'phase-limit') {
+          remaining.forEach((task, i) => { task.start = -1; task.placements = originalPlacements[i]; });
+          rowUsed.fill(0n);
+          teacherUsed.fill(0n);
+          status = undefined;
+        }
+      }
+      if (!status) status = await runSearch(Infinity);
+      if (status === 'cancelled') return null;
+      if (status === 'incomplete') return { status, nodes };
+      if (status === 'infeasible') return { status, reason: 'Pro tyto učitele, délky schůzek a zámky neexistuje rozpis bez kolizí a bez mezer od prvního času. Změň zámky nebo podmínky rozpisu.', nodes };
+      tasks.forEach(task => { task.card.startCol = first + task.start; });
+      working.rowData.forEach(row => row.cards.sort((a, b) => a.startCol - b.startCol));
+      if (evaluateConflictScore(working) || working.rowData.some(hasScheduleGaps)) {
+        throw new Error('Kontrola výsledného rozpisu selhala.');
+      }
+      return { status: 'solved', model: working, score: 0, nodes };
     }
 
     async function runGenerator() {
@@ -931,15 +1107,21 @@
       try {
         const result = await generateSchedule(state.model, {
           shouldCancel: () => cancelGeneration,
-          onProgress: (step, score) => { generatorProgress.textContent = `Hledání ${Math.round(step / 1600 * 100)} % · Nejnižší počet kolizí: ${score}`; }
+          onProgress: ({ nodes, elapsedMs }) => { generatorProgress.textContent = `Hledám rozpis bez kolizí… Prověřeno možností: ${nodes.toLocaleString('cs-CZ')} · ${Math.floor(elapsedMs / 1000)} s`; }
         });
-        if (!result) return;
+        if (!result) {
+          setMessage('info', 'Hledání zrušeno', 'Původní rozpis zůstal zachován. Hledání nebylo dokončeno, takže zatím nevíme, zda existuje bezkolizní řešení.');
+          return;
+        }
+        if (result.status !== 'solved') {
+          setMessage('warn', result.status === 'infeasible' ? 'Bezkolizní rozpis nelze sestavit' : 'Hledání nebylo dokončeno',
+            (result.reason || 'Hledání dosáhlo nastaveného limitu; existence bezkolizního řešení zatím není rozhodnuta.') + ' Původní rozpis zůstal zachován.');
+          return;
+        }
         state.model = result.model;
         state.selectedCardId = null;
         state.lastMovedCardId = null;
-        state.message = { type: result.score ? 'warn' : 'ok', title: 'Rozpis vygenerován', detail: result.score
-          ? `Učitelé navazují od prvního času bez mezer a zamčené pozice zůstaly zachované. Zbývající počet kolizí: ${result.score}. Hledání nenašlo bezkolizní rozpis; můžeš ho zopakovat nebo změnit zámky.`
-          : 'Rozpis je bez kolizí a bez mezer od prvního času. Učitelé, délky kartiček i zamčené pozice zůstaly zachované.' };
+        state.message = { type: 'ok', title: 'Rozpis vygenerován', detail: 'Rozpis je bez kolizí a bez mezer od prvního času. Učitelé, délky kartiček i zamčené pozice zůstaly zachované.' };
         render();
       } catch (err) {
         setMessage('error', 'Rozpis se nepodařilo vygenerovat', err.message + ' Původní rozpis zůstal zachován.');
@@ -1052,7 +1234,8 @@
         setMessage('error', 'Nelze přesunout do jiného řádku', 'Každá kartička smí zůstat pouze ve svém řádku.');
         return;
       }
-      moveSelectedToEmptySlot(state.selectedCardId, col);
+      if (selected.card.span === 2) moveSelectedToColumn(state.selectedCardId, col);
+      else moveSelectedToEmptySlot(state.selectedCardId, col);
     }
 
     function renderPanels() {
@@ -1208,7 +1391,15 @@
         cardEl.addEventListener('click', e => {
           if (e.target.closest('.card-name-edit, .card-lock')) return;
           e.stopPropagation();
-          handleCardClick(cardEl.dataset.cardId);
+          const selected = state.selectedCardId && findCardById(state.model, state.selectedCardId);
+          const target = findCardById(state.model, cardEl.dataset.cardId);
+          if (selected?.card.span === 2 && selected.row.id === target?.row.id) {
+            const track = cardEl.closest('.row-track');
+            const col = FIXED_COLS + Math.floor((e.clientX - track.getBoundingClientRect().left) / CELL_W);
+            moveSelectedToColumn(selected.card.id, col);
+          } else {
+            handleCardClick(cardEl.dataset.cardId);
+          }
         });
       });
 
